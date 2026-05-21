@@ -143,8 +143,14 @@ io.on('connection', (socket) => {
   socket.on('battle:action', (action) => {
     const room = rooms.getRoomBySocket(socket.id)
     if (!room) return
-    // 广播给同房间其他客户端
-    socket.to(room.code).emit('battle:action', action)
+    if (action.type === 'endTurn') {
+      // 回合结束: 广播给所有客户端推进回合
+      io.to(room.code).emit('battle:turnChange', { fromSocket: socket.id })
+      console.log(`[battle:endTurn] room ${room.code} by ${socket.id}`)
+    } else {
+      // 其他行动: 广播给其他客户端
+      socket.to(room.code).emit('battle:action', action)
+    }
   })
 
   // ===== 断开连接 =====

@@ -45,8 +45,17 @@ onMounted(() => {
 onUnmounted(() => {
   if (isMultiplayer.value) {
     multiplayerClient.off('battle:action', onRemoteBattleAction)
+    multiplayerClient.off('battle:turnChange', () => {})
   }
 })
+
+// 多人模式: 监听服务端的回合变更通知
+if (isMultiplayer.value) {
+  multiplayerClient.on('battle:turnChange', (_data: any) => {
+    gameStore.advancePhase() // action → discard (or discard → next)
+    gameStore.advancePhase() // next → draw (triggers watcher)
+  })
+}
 
 const router = useRouter()
 const gameStore = useGameStore()
@@ -83,7 +92,11 @@ function checkPermission(): boolean {
 
 onMounted(() => {
   if (gameStore.phase === 'battle') {
-    startSpawnPhase()
+    if (isMultiplayer.value) {
+      spawnMultiplayer()
+    } else {
+      startSpawnPhase()
+    }
   }
 })
 
@@ -122,6 +135,21 @@ function showSpawnForCurrent(): void {
   }
 }
 
+function spawnMultiplayer(): void {
+  const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
+  if (!myPlayer || myPlayer.currentShipId) {
+    startDrawPhase()
+    return
+  }
+  spawnPlayerName.value = myPlayer.name
+  const playerShips = shipStore.ships.filter(s => s.ownerTeamId === myPlayer.teamId)
+  if (playerShips.length === 0) {
+    startDrawPhase()
+    return
+  }
+  showSpawnDialog.value = true
+}
+
 function onTransitionConfirm(): void {
   transitionVisible.value = false
   // 区分出生阶段与正常回合阶段
@@ -156,18 +184,29 @@ function handleSpawnSelect(compartmentId: string): void {
 // ===== 回合切换 (出生完毕后) =====
 watch(() => gameStore.currentPlayerId, (newId, oldId) => {
   if (oldId && newId && gameStore.phase === 'battle') {
-    const player = gameStore.players.find(p => p.id === newId)
-    if (player) {
-      transitionToName.value = player.name
-      transitionVisible.value = true
-      combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
+    if (isMultiplayer.value) {
+      // 多人: 直接进入回合, 不弹遮罩
+      startDrawPhase()
+    } else {
+      const player = gameStore.players.find(p => p.id === newId)
+      if (player) {
+        transitionToName.value = player.name
+        transitionVisible.value = true
+        combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
+      }
     }
   }
 })
 
 watch(() => gameStore.currentTurnPhase, (phase) => {
   if (phase === 'draw' && gameStore.phase === 'battle') {
-    startDrawPhase()
+    if (isMultiplayer.value) {
+      if (gameStore.currentPlayerId === multiplayerClient.myPlayerId) {
+        startDrawPhase()
+      }
+    } else {
+      startDrawPhase()
+    }
   }
 })
 
@@ -937,7 +976,12 @@ function handleEndTurn(): void {
   }
 
   uiStore.resetBattleState()
-  // 跳转到下一位玩家: 确保从action出发 (action → discard → next)
+  if (isMultiplayer.value) {
+    // 多人: 通知服务端回合结束, 等待服务端广播 turnChange
+    multiplayerClient.sendBattleAction({ type: 'endTurn' })
+    return
+  }
+  // 热座: 本地推进回合
   if (gameStore.currentTurnPhase === 'action') {
     gameStore.advancePhase() // action → discard
   }

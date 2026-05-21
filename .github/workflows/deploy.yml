@@ -18,5 +18,5 @@ jobs:
             cd ~/navy-commander
             git pull origin master
             npm install
-            pm2 restart game-server
-            pm2 restart game-client
+            npm run build
+            pm2 restart navy-commander

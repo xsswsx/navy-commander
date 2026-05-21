@@ -1,8 +1,12 @@
 import express from 'express'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { RoomManager } from './RoomManager.js'
 import type { ClientToServerEvents, ServerToClientEvents } from '../shared/protocol.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const app = express()
 const httpServer = createServer(app)
@@ -12,6 +16,9 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 
 const rooms = new RoomManager()
 
+// 生产环境: 服务 dist 静态文件
+const distPath = path.join(__dirname, '..', 'dist')
+app.use(express.static(distPath))
 app.get('/health', (_req, res) => res.json({ ok: true }))
 
 io.on('connection', (socket) => {
@@ -136,6 +143,11 @@ io.on('connection', (socket) => {
       io.to(room.code).emit('room:playerLeft', socket.id)
     }
   })
+})
+
+// SPA fallback: 非API路由返回 index.html
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'))
 })
 
 const PORT = process.env.PORT || 3001

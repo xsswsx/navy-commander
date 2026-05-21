@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -16,6 +16,37 @@ import CombatLog from '@/components/battle/CombatLog.vue'
 import TurnTransition from '@/components/mode-specific/hotseat/TurnTransition.vue'
 import CommandDialog from '@/components/battle/CommandDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
+
+const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
+
+// 多人模式: 发送战斗行动
+function sendBattleAction(action: any): void {
+  if (!isMultiplayer.value) return
+  multiplayerClient.sendBattleAction(action)
+}
+
+// 多人模式: 接收战斗行动
+function onRemoteBattleAction(action: any): void {
+  if (!isMultiplayer.value) return
+  // 简单中继: 将远程行动应用到本地 (权限由服务端控制)
+  switch (action.type) {
+    case 'playCard': handlePlayCard(action.cardId); break
+    case 'endTurn': handleEndTurn(); break
+  }
+}
+
+onMounted(() => {
+  if (isMultiplayer.value) {
+    multiplayerClient.onBattleAction(onRemoteBattleAction)
+  }
+})
+
+onUnmounted(() => {
+  if (isMultiplayer.value) {
+    multiplayerClient.off('battle:action', onRemoteBattleAction)
+  }
+})
 
 const router = useRouter()
 const gameStore = useGameStore()

@@ -25,16 +25,16 @@ io.on('connection', (socket) => {
   console.log(`[connect] ${socket.id}`)
 
   // ===== 房间操作 =====
-  socket.on('room:create', ({ playerName, slots }) => {
+  socket.on('room:create', ({ playerName, totalCompartments, slots }) => {
     const prev = rooms.leaveRoom(socket.id)
     if (prev.room) {
       io.to(prev.room.code).emit('room:update', prev.room)
     }
 
-    const room = rooms.createRoom(socket.id, playerName, slots || [])
+    const room = rooms.createRoom(socket.id, playerName, totalCompartments || 10, slots || [])
     socket.join(room.code)
     socket.emit('room:update', room)
-    console.log(`[room:create] ${room.code} by ${playerName} (${room.slots.length} slots)`)
+    console.log(`[room:create] ${room.code} by ${playerName} (${room.slots.length} slots, ${room.totalCompartments} comps)`)
   })
 
   socket.on('room:join', ({ roomCode, playerName }) => {
@@ -101,6 +101,12 @@ io.on('connection', (socket) => {
     if (!room || room.phase !== 'design') return
     rooms.setReady(room, socket.id, true)
     io.to(room.code).emit('room:update', room)
+    if (rooms.isAllReady(room)) {
+      io.to(room.code).emit('design:allReady')
+      room.phase = 'battle'
+      io.to(room.code).emit('room:update', room)
+      console.log(`[design:allReady] room ${room.code}`)
+    }
     if (rooms.isAllReady(room)) {
       io.to(room.code).emit('design:allReady')
     }

@@ -7,13 +7,14 @@ export class RoomManager {
   createRoom(
     hostSocketId: string,
     playerName: string,
+    totalCompartments: number,
     slotConfig: { teamId: string; playerName: string }[]
   ): RoomState {
     const code = generateRoomCode()
     const slots: import('../shared/protocol.js').SlotState[] = slotConfig.map((s, i) => ({
       index: i,
       teamId: s.teamId,
-      playerName: null,   // 初始空槽位
+      playerName: null,
       socketId: null,
       isReady: false,
     }))
@@ -24,7 +25,7 @@ export class RoomManager {
       slots,
       phase: 'lobby',
       teamCount: new Set(slotConfig.map(s => s.teamId)).size,
-      totalCompartments: 10,
+      totalCompartments,
     }
     this.rooms.set(code, room)
     return room

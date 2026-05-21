@@ -70,7 +70,7 @@ function createRoom(): void {
     }
   }
 
-  multiplayerClient.createRoom(playerName.value.trim(), slotList)
+  multiplayerClient.createRoom(playerName.value.trim(), totalCompartments.value, slotList)
 }
 
 function joinRoom(): void {

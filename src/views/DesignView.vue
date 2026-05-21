@@ -61,6 +61,7 @@ const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
 const isReady = ref(false)
 const allReady = ref(false)
 const mpRoomSlots = ref<{ index: number; teamId: string; playerName: string | null; isReady: boolean }[]>([])
+const designLocked = computed(() => isMultiplayer.value && isReady.value)
 
 function syncDesign(): void {
   if (!isMultiplayer.value) return
@@ -78,7 +79,7 @@ function syncDesign(): void {
 
 function onRemoteDesign(data: any): void {
   if (!isMultiplayer.value) return
-  const myPlayer = gameStore.players.find(p => p.id === gameStore.currentPlayerId)
+  const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
   if (!myPlayer || data.teamId !== myPlayer.teamId) return
   ships.value = data.ships.map((s: any) => ({
     name: s.name,
@@ -148,14 +149,17 @@ watch(allReady, (val) => {
 })
 
 function addShip(): void {
+  if (designLocked.value) return
   ships.value.push({ name: `舰船${ships.value.length + 1}`, compartments: [] })
 }
 
 function removeShip(index: number): void {
+  if (designLocked.value) return
   ships.value.splice(index, 1)
 }
 
 function addCompartment(shipIndex: number): void {
+  if (designLocked.value) return
   if (remainingCompartments.value < 1) {
     ElMessage.warning('没有剩余舱段配额')
     return
@@ -171,6 +175,7 @@ function addCompartment(shipIndex: number): void {
 }
 
 function removeCompartment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
 
@@ -210,6 +215,7 @@ function selectEquipment(type: EquipmentType): void {
 }
 
 function placeEquipment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   if (!selectedEquipment.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
@@ -269,6 +275,7 @@ function removeEquipmentFromSlot(ship: typeof ships.value[0], slotIndex: number)
 }
 
 function removeEquipment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
   if (!slot) return
@@ -818,7 +825,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
           <div class="ship-header">
             <el-input v-model="ship.name" size="small" style="width: 180px" :disabled="isMultiplayer && isReady" />
             <span>舱段数: {{ ship.compartments.length }}</span>
-            <el-button size="small" @click="addCompartment(si)" :disabled="(isMultiplayer && isReady) || remainingCompartments < 1">
+            <el-button size="small" @click="addCompartment(si)" :disabled="designLocked || remainingCompartments < 1">
               添加舱段
             </el-button>
             <el-button size="small" type="success" @click="saveShipAsPreset(si)">保存为预设</el-button>
@@ -832,11 +839,13 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
               class="compartment-slot"
               :class="{
                 'has-equipment': slot.equipmentType || slot.slaveOfSlot != null,
-                targeted: selectedEquipment && slot.slaveOfSlot == null,
+                targeted: selectedEquipment && slot.slaveOfSlot == null && !designLocked,
                 slave: slot.slaveOfSlot != null,
                 master: isSlotMaster(slot),
+                locked: designLocked,
               }"
-              @click="(isMultiplayer && isReady) ? undefined : (slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci)))"
+              :style="{ cursor: designLocked ? 'not-allowed' : 'pointer' }"
+              @click="designLocked ? undefined : (slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci)))"
             >
               <div class="slot-index">#{{ ci + 1 }}</div>
               <div class="slot-equipment">
@@ -849,7 +858,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
                 HP: {{ compPreviewHP(si, ci) }}
               </div>
               <el-button
-                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null && !(isMultiplayer && isReady)"
+                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null && !designLocked"
                 class="slot-remove"
                 size="small"
                 type="danger"
@@ -1176,6 +1185,11 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 
 .compartment-slot.master {
   border-color: #e6a23c;
+}
+
+.compartment-slot.locked {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .slot-index {

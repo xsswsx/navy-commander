@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -8,6 +8,7 @@ import { getAllEquipment, getEquipmentByCategory } from '@/game/equipment/regist
 import { baseHp } from '@/game/constants'
 import type { EquipmentType, ShipDesign, DesignSlot } from '@/game/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
 const router = useRouter()
 const gameStore = useGameStore()
@@ -47,6 +48,63 @@ const usedCompartments = computed(() =>
 const remainingCompartments = computed(() => teamCompartmentBudget.value - usedCompartments.value)
 
 const selectedEquipment = ref<EquipmentType | null>(null)
+const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
+const isReady = ref(false)
+const allReady = ref(false)
+
+function syncDesign(): void {
+  if (!isMultiplayer.value) return
+  const design = {
+    ships: ships.value.map(s => ({
+      name: s.name,
+      compartments: s.compartments.map(c => ({
+        compartmentIndex: c.compartmentIndex,
+        equipmentType: c.equipmentType,
+      })),
+    })),
+  }
+  multiplayerClient.sendDesignSync(design)
+}
+
+function onRemoteDesign(data: any): void {
+  if (!isMultiplayer.value) return
+  const myPlayer = gameStore.players.find(p => p.id === gameStore.currentPlayerId)
+  if (!myPlayer || data.teamId !== myPlayer.teamId) return
+  ships.value = data.ships.map((s: any) => ({
+    name: s.name,
+    compartments: s.compartments.map((c: any) => ({
+      compartmentIndex: c.compartmentIndex,
+      equipmentType: c.equipmentType as EquipmentType | null,
+      slaveOfSlot: null as number | null,
+      slaveIndices: [] as number[],
+    })),
+  }))
+  for (let si = 0; si < ships.value.length; si++) {
+    rebuildMultiComp(si)
+  }
+}
+
+onMounted(() => {
+  if (isMultiplayer.value) {
+    multiplayerClient.onDesignSync(onRemoteDesign)
+    multiplayerClient.onAllReady(() => { allReady.value = true })
+  }
+})
+
+onUnmounted(() => {
+  if (isMultiplayer.value) {
+    multiplayerClient.off('design:sync', onRemoteDesign)
+    multiplayerClient.off('design:allReady', () => {})
+  }
+})
+
+watch(ships, () => { syncDesign() }, { deep: true })
+
+watch(allReady, (val) => {
+  if (val && isMultiplayer.value) {
+    confirmDesign()
+  }
+})
 
 function addShip(): void {
   ships.value.push({ name: `舰船${ships.value.length + 1}`, compartments: [] })

@@ -79,6 +79,12 @@ io.on('connection', (socket) => {
     console.log(`[design:start] room ${room.code}`)
   })
 
+  // 客户端请求当前房间状态
+  socket.on('room:state', () => {
+    const room = rooms.getRoomBySocket(socket.id)
+    if (room) socket.emit('room:update', room)
+  })
+
   // ===== 槽位操作 =====
   socket.on('slot:join', ({ slotIndex }) => {
     const room = rooms.getRoomBySocket(socket.id)

@@ -96,6 +96,8 @@ onMounted(() => {
   if (isMultiplayer.value) {
     multiplayerClient.onDesignSync(onRemoteDesign)
     multiplayerClient.onAllReady(() => { allReady.value = true })
+    // 立即请求房间状态以显示准备指示灯
+    multiplayerClient.requestRoomState()
     multiplayerClient.onRoomUpdate((r: any) => {
       mpRoomSlots.value = r.slots || []
     })
@@ -113,7 +115,7 @@ watch(ships, () => { syncDesign() }, { deep: true })
 
 watch(allReady, (val) => {
   if (val && isMultiplayer.value) {
-    confirmDesign()
+    // 各阵营已在自己准备时调过 finalizeDesign, 这里只需启动战斗
     gameStore.startBattlePhase()
     cardStore.dealInitialHands(gameStore.players.map(p => p.id))
     ElMessage.success('全部就绪，进入战斗！')
@@ -810,7 +812,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
                 slave: slot.slaveOfSlot != null,
                 master: isSlotMaster(slot),
               }"
-              @click="slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci))"
+              @click="(isMultiplayer && isReady) ? undefined : (slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci)))"
             >
               <div class="slot-index">#{{ ci + 1 }}</div>
               <div class="slot-equipment">

@@ -7,25 +7,32 @@ export class MultiplayerClient {
   private socket: Socket | null = null
   private listeners = new Map<string, Set<Callback>>()
   private _myPlayerId = ''
+  private cachedRoom: RoomState | null = null
 
   get myPlayerId(): string { return this._myPlayerId }
   set myPlayerId(id: string) { this._myPlayerId = id }
 
   connect(): void {
     if (this.socket?.connected) return
-    // 连接同源服务器 (Vite dev server 代理 /socket.io → localhost:3001)
     this.socket = io({ autoConnect: true, reconnection: true })
     this.socket.on('connect', () => console.log('[MP] connected', this.socket?.id))
     this.socket.on('disconnect', () => console.log('[MP] disconnected'))
+    this.cachedRoom = null
   }
 
   disconnect(): void {
     this.socket?.disconnect()
     this.socket = null
     this.listeners.clear()
+    this.cachedRoom = null
   }
 
   get id(): string { return this.socket?.id ?? '' }
+
+  /** 请求当前房间状态 — 服务端返回缓存的 room:update */
+  requestRoomState(): void {
+    this.socket?.emit('room:state')
+  }
 
   // ===== 房间 =====
   createRoom(playerName: string, totalCompartments: number, slots: { teamId: string; playerName: string }[]): void {
@@ -76,7 +83,11 @@ export class MultiplayerClient {
     this.socket?.off(event, cb)
   }
 
-  onRoomUpdate(cb: (room: RoomState) => void): void { this.on('room:update', cb) }
+  onRoomUpdate(cb: (room: RoomState) => void): void {
+    this.on('room:update', (r: RoomState) => { this.cachedRoom = r; cb(r) })
+    // 已有缓存则立即回调
+    if (this.cachedRoom) cb(this.cachedRoom)
+  }
   onRoomError(cb: (err: { message: string }) => void): void { this.on('room:error', cb) }
   onDesignSync(cb: (data: DesignSyncPayload & { teamId: string }) => void): void { this.on('design:sync', cb) }
   onAllReady(cb: () => void): void { this.on('design:allReady', cb) }

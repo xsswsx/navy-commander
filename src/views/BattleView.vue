@@ -328,8 +328,29 @@ function handleCommandCompartment(compartmentId: string): void {
   const ship = shipStore.findShip(player.currentShipId)
   if (!ship) { uiStore.resetBattleState(); return }
 
-  const comp = ship.compartments.find(c => c.id === compartmentId)
-  if (!comp || !comp.equipmentType || comp.isDestroyed) {
+  let comp = ship.compartments.find(c => c.id === compartmentId)
+  if (!comp) { ElMessage.warning('无效的舱段'); return }
+
+  // 如果是从属舱段，重定向到主舱段
+  if (comp.multiCompRootId) {
+    const master = ship.compartments.find(c => c.id === comp!.multiCompRootId)
+    if (!master || !master.equipmentType) { ElMessage.warning('无效的军备'); return }
+    comp = master
+  }
+
+  // 多舱段军备: 检查是否有从属被击毁
+  if (comp.multiCompSlaveIds.length > 0) {
+    const anySlaveDestroyed = comp.multiCompSlaveIds.some(sid => {
+      const s = ship.compartments.find(c => c.id === sid)
+      return s?.isDestroyed
+    })
+    if (anySlaveDestroyed || comp.isDestroyed) {
+      ElMessage.warning('此多舱段军备有舱段被击毁，无法使用')
+      return
+    }
+  }
+
+  if (!comp.equipmentType || comp.isDestroyed) {
     ElMessage.warning('无效的指挥目标')
     return
   }
@@ -344,12 +365,6 @@ function handleCommandCompartment(compartmentId: string): void {
   const isRemoteCmd = ['command_room', 'command_center', 'integrated_command'].includes(comp.equipmentType)
   if (!isRemoteCmd && !isPlayerOnCompartment(player, comp, ship)) {
     ElMessage.warning('必须身处该舱段才能指挥')
-    return
-  }
-
-  // 击毁的军备不能指挥
-  if (comp.isDestroyed) {
-    ElMessage.warning('已被击毁的军备不能指挥')
     return
   }
 
@@ -378,10 +393,10 @@ function handleCommandCompartment(compartmentId: string): void {
   }
 
   uiStore.enterCommandingState(compartmentId)
+  commandDialogComp.value = comp
 
   // 弹出指挥选项
   if (eqDef.commands.length > 1) {
-    commandDialogComp.value = comp
     commandDialogOptions.value = eqDef.commands.map(c => ({ id: c.id, name: c.name }))
     showCommandDialog.value = true
   } else {

@@ -317,7 +317,8 @@ function getFighterGroups(shipId: string): { teamId: string; color: string; coun
     </div>
 
     <div v-if="teamsWithShips.length === 0" class="empty-board">
-      <p>没有存活舰船</p>
+      <p v-if="gameStore.mode === 'multiplayer'">正在加载战斗数据... ({{ shipStore.ships.length }}艘船, {{ gameStore.players.length }}名玩家)</p>
+      <p v-else>没有存活舰船</p>
     </div>
   </div>
 </template>

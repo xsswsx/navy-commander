@@ -27,7 +27,9 @@ const router = createRouter({
       component: () => import('@/views/BattleView.vue'),
       beforeEnter: () => {
         const gameStore = useGameStore()
+        console.log('[router] /battle guard phase=', gameStore.phase, 'mode=', gameStore.mode, 'teams=', gameStore.teams.length, 'players=', gameStore.players.length)
         if (gameStore.phase !== 'battle' && gameStore.phase !== 'results') {
+          console.log('[router] /battle BLOCKED, redirecting to /')
           return { name: 'setup' }
         }
       },

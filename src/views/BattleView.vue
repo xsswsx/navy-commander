@@ -68,6 +68,14 @@ const transitionVisible = ref(false)
 const transitionToName = ref('')
 const showSpawnDialog = ref(false)
 const spawnPlayerName = ref('')
+// 多人模式出生时用于模板的teamId (不能用 currentPlayer, 因为可能指向其他玩家)
+const spawningPlayerTeamId = computed(() => {
+  if (isMultiplayer.value) {
+    const p = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
+    return p?.teamId ?? ''
+  }
+  return gameStore.currentPlayer?.teamId ?? ''
+})
 const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
@@ -91,6 +99,9 @@ function checkPermission(): boolean {
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
 
 onMounted(() => {
+  console.log('[BattleView] mounted mode=', gameStore.mode, 'phase=', gameStore.phase,
+    'players=', gameStore.players.length, 'ships=', shipStore.ships.length,
+    'myId=', multiplayerClient.myPlayerId)
   if (gameStore.phase === 'battle') {
     if (isMultiplayer.value) {
       spawnMultiplayer()
@@ -164,6 +175,23 @@ function onTransitionConfirm(): void {
 }
 
 function handleSpawnSelect(compartmentId: string): void {
+  // 多人模式: 只为自己选出生点, 然后直接开始回合
+  if (isMultiplayer.value) {
+    const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
+    if (!myPlayer) return
+    const ship = shipStore.getShipByCompartment(compartmentId)
+    if (!ship) return
+    const comp = ship.compartments.find(c => c.id === compartmentId)
+    if (!comp) return
+    myPlayer.currentShipId = ship.id
+    myPlayer.currentCompartmentIndex = comp.position
+    combatStore.log(`${myPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
+    showSpawnDialog.value = false
+    startDrawPhase()
+    return
+  }
+
+  // 热座: 按顺序为所有玩家选出生点
   const playerIds = gameStore.turnOrder
   const pid = playerIds[spawnIndex.value]
   const player = gameStore.players.find(p => p.id === pid)
@@ -998,7 +1026,7 @@ watch(() => gameStore.phase, p => { if (p === 'results') router.push('/results')
     <!-- 出生点 -->
     <el-dialog v-model="showSpawnDialog" :title="`${spawnPlayerName} — 选择出生点`" width="500px" :close-on-click-modal="false" :show-close="false">
       <div class="spawn-grid">
-        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === (gameStore.players.find(p => p.id === gameStore.turnOrder[spawnIndex])?.teamId ?? ''))" :key="ship.id" class="spawn-ship">
+        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === spawningPlayerTeamId)" :key="ship.id" class="spawn-ship">
           <h4>{{ ship.name }}</h4>
           <div class="spawn-comps">
             <div v-for="comp in ship.compartments" :key="comp.id" class="spawn-comp"

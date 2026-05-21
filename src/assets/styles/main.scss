@@ -1,0 +1,48 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  font-family: 'Microsoft YaHei', 'PingFang SC', -apple-system, sans-serif;
+  background: #0a1628;
+  color: #e0e6ed;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d2137;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1a3355;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a4a7f;
+}
+
+// Element Plus 暗色主题覆盖
+.el-dialog {
+  --el-dialog-bg-color: #0d2137;
+  --el-dialog-title-font-size: 16px;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #1a5c9e;
+  --el-button-border-color: #1a5c9e;
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}

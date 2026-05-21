@@ -88,6 +88,7 @@ function leaveSlot(): void {
 
 function startDesign(): void {
   if (!room.value) return
+  multiplayerClient.startDesign(room.value.teamCount || 2, totalCompartments.value, teams.map(t => ({ name: t.name, color: t.color })))
   emit('start-design', room.value)
 }
 

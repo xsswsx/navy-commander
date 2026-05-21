@@ -110,6 +110,10 @@ watch(ships, () => { syncDesign() }, { deep: true })
 watch(allReady, (val) => {
   if (val && isMultiplayer.value) {
     confirmDesign()
+    gameStore.startBattlePhase()
+    cardStore.dealInitialHands(gameStore.players.map(p => p.id))
+    ElMessage.success('全部就绪，进入战斗！')
+    router.push('/battle')
   }
 })
 

@@ -275,6 +275,20 @@ function validateDesign(): boolean {
   return true
 }
 
+function handleReady(): void {
+  if (!validateDesign()) {
+    ElMessage.warning('设计不符合要求，无法准备就绪')
+    return
+  }
+  confirmDesign()
+  multiplayerClient.setReady()
+}
+
+function handleCancelReady(): void {
+  multiplayerClient.cancelReady()
+  isReady.value = false
+}
+
 function confirmDesign(): void {
   if (!validateDesign()) return
   if (!currentTeam.value) return
@@ -740,21 +754,24 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
             <h2 v-if="currentTeam">
               <span class="color-dot" :style="{ background: currentTeam!.color }"></span>
               {{ currentTeam!.name }} 设计舰船
-              <span style="font-size:14px;color:#6a8aaa;font-weight:normal">
+              <span style="font-size:14px;color:#6a8aaa;font-weight:normal;margin-left:8px">
                 ({{ gameStore.players.filter(p => p.teamId === currentTeam!.id).map(p => p.name).join(', ') }})
               </span>
-              <!-- 多人模式: 显示本阵营准备状态 -->
-              <span v-if="isMultiplayer && mpRoomSlots.length > 0" style="margin-left:12px;font-size:12px">
-                <template v-for="s in mpRoomSlots.filter(s => s.teamId === currentTeam!.id)" :key="s.index">
-                  <el-tag v-if="s.isReady" type="success" size="small" effect="dark" style="margin-right:4px">
-                    {{ s.playerName || '槽位'+ (s.index+1) }} ✓
-                  </el-tag>
-                  <el-tag v-else-if="s.playerName" type="warning" size="small" effect="plain" style="margin-right:4px">
-                    {{ s.playerName }} ···
-                  </el-tag>
-                </template>
-              </span>
             </h2>
+
+            <!-- 多人模式: 全局准备状态指示灯 -->
+            <div v-if="isMultiplayer && mpRoomSlots.length > 0" class="ready-lights">
+              <div v-for="teamId in [...new Set(mpRoomSlots.map(s => s.teamId))]" :key="teamId" class="ready-team">
+                <span class="ready-team-name">{{ teamId }}</span>
+                <span
+                  v-for="s in mpRoomSlots.filter(s => s.teamId === teamId)"
+                  :key="s.index"
+                  class="ready-dot"
+                  :class="{ on: s.isReady, occupied: !!s.playerName }"
+                  :title="`${s.playerName || '空槽位'} — ${s.isReady ? '已准备' : '未准备'}`"
+                >●</span>
+              </div>
+            </div>
           </div>
           <div class="budget-info">
             <span>舱段配额: {{ usedCompartments }} / {{ teamCompartmentBudget }}</span>
@@ -823,10 +840,10 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
           <template v-if="isMultiplayer">
             <el-tag v-if="isReady" type="success" size="large" style="margin-right:12px">已准备就绪</el-tag>
             <template v-if="isReady">
-              <el-button type="warning" @click="isReady = false; multiplayerClient.cancelReady()">取消准备</el-button>
+              <el-button type="warning" @click="handleCancelReady()">取消准备</el-button>
             </template>
             <template v-else>
-              <el-button type="primary" size="large" @click="multiplayerClient.setReady(); confirmDesign()">准备就绪</el-button>
+              <el-button type="primary" size="large" @click="handleReady()">准备就绪</el-button>
             </template>
           </template>
           <!-- 热座模式: 确认设计 -->
@@ -1013,6 +1030,40 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
   margin-bottom: 20px;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.ready-lights {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.ready-team {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ready-team-name {
+  font-size: 12px;
+  color: #6a8aaa;
+  margin-right: 4px;
+}
+
+.ready-dot {
+  font-size: 16px;
+  color: #2a3a5f;
+  transition: color 0.3s;
+}
+
+.ready-dot.occupied {
+  color: #e6a23c;
+}
+
+.ready-dot.on {
+  color: #67c23a;
+  text-shadow: 0 0 6px rgba(103, 194, 58, 0.5);
 }
 
 .color-dot {

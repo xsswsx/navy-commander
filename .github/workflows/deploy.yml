@@ -19,4 +19,4 @@ jobs:
             git pull origin master
             npm install
             npm run build
-            pm2 restart navy-commander
+            pm2 startOrReload ecosystem.config.cjs --update-env

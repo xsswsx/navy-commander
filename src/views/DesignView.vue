@@ -58,6 +58,7 @@ const selectedEquipment = ref<EquipmentType | null>(null)
 const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
 const isReady = ref(false)
 const allReady = ref(false)
+const mpRoomSlots = ref<{ index: number; teamId: string; playerName: string | null; isReady: boolean }[]>([])
 
 function syncDesign(): void {
   if (!isMultiplayer.value) return
@@ -95,6 +96,9 @@ onMounted(() => {
   if (isMultiplayer.value) {
     multiplayerClient.onDesignSync(onRemoteDesign)
     multiplayerClient.onAllReady(() => { allReady.value = true })
+    multiplayerClient.onRoomUpdate((r: any) => {
+      mpRoomSlots.value = r.slots || []
+    })
   }
 })
 
@@ -738,6 +742,17 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
               {{ currentTeam!.name }} 设计舰船
               <span style="font-size:14px;color:#6a8aaa;font-weight:normal">
                 ({{ gameStore.players.filter(p => p.teamId === currentTeam!.id).map(p => p.name).join(', ') }})
+              </span>
+              <!-- 多人模式: 显示本阵营准备状态 -->
+              <span v-if="isMultiplayer && mpRoomSlots.length > 0" style="margin-left:12px;font-size:12px">
+                <template v-for="s in mpRoomSlots.filter(s => s.teamId === currentTeam!.id)" :key="s.index">
+                  <el-tag v-if="s.isReady" type="success" size="small" effect="dark" style="margin-right:4px">
+                    {{ s.playerName || '槽位'+ (s.index+1) }} ✓
+                  </el-tag>
+                  <el-tag v-else-if="s.playerName" type="warning" size="small" effect="plain" style="margin-right:4px">
+                    {{ s.playerName }} ···
+                  </el-tag>
+                </template>
               </span>
             </h2>
           </div>

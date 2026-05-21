@@ -66,17 +66,17 @@ io.on('connection', (socket) => {
     socket.emit('room:update', { code: '', hostSocketId: null, players: [], slots: [], phase: 'lobby' as const, teamCount: 0, totalCompartments: 0 })
   })
 
-  socket.on('room:startDesign', ({ teamCount, totalCompartments, teams }) => {
+  socket.on('room:startDesign', ({ teamCount, totalCompartments }) => {
     const room = rooms.getRoomBySocket(socket.id)
     if (!room || room.hostSocketId !== socket.id) {
       socket.emit('room:error', { message: '仅房主可开始设计' })
       return
     }
-    room.teamCount = teamCount
-    room.totalCompartments = totalCompartments
-    rooms.initSlots(room, teams)
+    room.teamCount = teamCount || room.teamCount
+    room.totalCompartments = totalCompartments || room.totalCompartments
     room.phase = 'design'
     io.to(room.code).emit('room:update', room)
+    console.log(`[design:start] room ${room.code}`)
   })
 
   // ===== 槽位操作 =====

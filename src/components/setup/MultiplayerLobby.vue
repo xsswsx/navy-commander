@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onUnmounted } from 'vue'
+import { ref, reactive, onUnmounted, watch } from 'vue'
 import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 import type { RoomState } from '@shared/protocol'
 import { TEAM_COLORS } from '@/game/constants'
@@ -14,6 +14,13 @@ const room = ref<RoomState | null>(null)
 const playerName = ref(localStorage.getItem('mp_playerName') || '')
 const roomCodeInput = ref('')
 const connected = ref(false)
+
+// 监听房间阶段变化 — 所有客户端检测到 design 时自动导航
+watch(() => room.value?.phase, (phase) => {
+  if (phase === 'design' && room.value) {
+    emit('start-design', room.value)
+  }
+})
 
 // 房间创建前的配置
 const teamCount = ref(2)
@@ -88,8 +95,8 @@ function leaveSlot(): void {
 
 function startDesign(): void {
   if (!room.value) return
-  multiplayerClient.startDesign(room.value.teamCount || 2, totalCompartments.value, teams.map(t => ({ name: t.name, color: t.color })))
-  emit('start-design', room.value)
+  // 通知服务器 → 服务器广播 room:update(phase=design) → watcher 触发所有客户端导航
+  multiplayerClient.startDesign(teamCount.value, totalCompartments.value, teams.map(t => ({ name: t.name, color: t.color })))
 }
 
 function copyRoomCode(): void {
@@ -169,7 +176,13 @@ initTeams()
     <div v-else class="lobby-section">
       <h3>房间: {{ room.code }}</h3>
       <el-button size="small" text @click="copyRoomCode">复制房间码</el-button>
-      <p class="room-info">玩家: {{ room.players.length }}人</p>
+      <div class="room-config-display">
+        <span>{{ room.slots.length }}个槽位</span>
+        <span>· {{ new Set(room.slots.map(s => s.teamId)).size }}个队伍</span>
+        <span>· 舱段数: {{ room.totalCompartments }}</span>
+        <span v-if="room.phase === 'lobby'">· <b style="color:#e6a23c">等待房主开始</b></span>
+        <span v-else-if="room.phase === 'design'">· <b style="color:#67c23a">设计阶段</b></span>
+      </div>
 
       <!-- 槽位列表 -->
       <div v-if="room.slots && room.slots.length > 0" class="slot-list">

@@ -7,8 +7,10 @@ export class MultiplayerClient {
   private socket: Socket | null = null
   private listeners = new Map<string, Set<Callback>>()
 
-  connect(serverUrl: string): void {
-    this.socket = io(serverUrl, { autoConnect: true, reconnection: true })
+  connect(): void {
+    if (this.socket?.connected) return
+    // 连接同源服务器 (Vite dev server 代理 /socket.io → localhost:3001)
+    this.socket = io({ autoConnect: true, reconnection: true })
     this.socket.on('connect', () => console.log('[MP] connected', this.socket?.id))
     this.socket.on('disconnect', () => console.log('[MP] disconnected'))
   }

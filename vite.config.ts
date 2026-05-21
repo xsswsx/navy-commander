@@ -10,4 +10,13 @@ export default defineConfig({
       '@shared': fileURLToPath(new URL('./shared', import.meta.url)),
     },
   },
+  server: {
+    proxy: {
+      '/socket.io': {
+        target: 'http://localhost:3001',
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
 })

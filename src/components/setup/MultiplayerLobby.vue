@@ -12,13 +12,11 @@ const emit = defineEmits<{
 const room = ref<RoomState | null>(null)
 const playerName = ref(localStorage.getItem('mp_playerName') || '')
 const roomCodeInput = ref('')
-const serverUrl = ref(localStorage.getItem('mp_serverUrl') || 'http://localhost:3001')
 const connected = ref(false)
 
 function initConnection(): void {
   multiplayerClient.disconnect()
-  multiplayerClient.connect(serverUrl.value)
-  localStorage.setItem('mp_serverUrl', serverUrl.value)
+  multiplayerClient.connect()
 
   multiplayerClient.onRoomUpdate((r) => {
     room.value = r
@@ -98,7 +96,6 @@ initConnection()
     <!-- 未加入房间 -->
     <div v-if="!room?.code" class="lobby-section">
       <h3>多人模式</h3>
-      <el-input v-model="serverUrl" placeholder="服务器地址" size="small" style="margin-bottom:8px" @change="initConnection" />
       <el-input v-model="playerName" placeholder="你的玩家名" size="small" style="margin-bottom:12px" />
 
       <div class="room-actions">

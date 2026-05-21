@@ -19,4 +19,4 @@ jobs:
             git pull origin master
             npm install
             pm2 restart game-server
-	    pm2 restart game-client
+            pm2 restart game-client

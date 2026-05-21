@@ -151,8 +151,8 @@ io.on('connection', (socket) => {
   })
 })
 
-// SPA fallback: 非API路由返回 index.html
-app.get('*', (_req, res) => {
+// SPA fallback: 非静态文件/API路由返回 index.html (Express 5 语法)
+app.use((_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'))
 })
 

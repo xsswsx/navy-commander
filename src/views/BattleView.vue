@@ -62,7 +62,22 @@ const spawnPlayerName = ref('')
 const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
-const spawnIndex = ref(0) // 出生点选择阶段: 当前正在选出生的玩家在turnOrder中的索引
+const spawnIndex = ref(0)
+
+// 多人模式权限检查
+function canAct(): boolean {
+  if (!isMultiplayer.value) return true
+  return gameStore.currentPlayerId === multiplayerClient.myPlayerId
+}
+
+function checkPermission(): boolean {
+  if (!isMultiplayer.value) return true
+  if (!canAct()) {
+    ElMessage.warning('等待其他玩家操作...')
+    return false
+  }
+  return true
+}
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
 
@@ -179,6 +194,7 @@ function startDrawPhase(): void {
 
 // ===== 卡牌点击 → state machine =====
 function handlePlayCard(cardId: string): void {
+  if (!checkPermission()) return
   if (uiStore.battleState !== 'idle') {
     ElMessage.warning('请先完成当前操作或取消')
     return
@@ -247,6 +263,7 @@ function handleSchemeCard(cardId: string): void {
 
 // ===== 自由行动 =====
 function handleFreeMove(): void {
+  if (!checkPermission()) return
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
   uiStore.clearCardSelection()

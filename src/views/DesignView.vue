@@ -20,10 +20,17 @@ const combatEquipment = getEquipmentByCategory('combat')
 const supportEquipment = getEquipmentByCategory('support')
 const resourceEquipment = getEquipmentByCategory('resource')
 
-// 阵营级设计: 每个阵营轮流设计
+// 阵营级设计: 热座轮流 / 多人同时
 const designTeamIndex = ref(0)
 const designerTeams = computed(() => gameStore.teams.map(t => t.id))
-const currentTeamId = computed(() => designerTeams.value[designTeamIndex.value] ?? null)
+const currentTeamId = computed(() => {
+  if (isMultiplayer.value) {
+    // 多人模式: 当前玩家所属阵营
+    const myPlayer = gameStore.players.find(p => p.id === gameStore.currentPlayerId)
+    return myPlayer?.teamId ?? null
+  }
+  return designerTeams.value[designTeamIndex.value] ?? null
+})
 const currentTeam = computed(() =>
   gameStore.teams.find(t => t.id === currentTeamId.value) ?? null
 )
@@ -265,7 +272,6 @@ function confirmDesign(): void {
   if (!currentTeam.value) return
 
   const teamId = currentTeam.value.id
-  // 用阵营第一位玩家作为ownerPlayerId
   const teamPlayers = gameStore.players.filter(p => p.teamId === teamId)
   const repPlayerId = teamPlayers[0]?.id ?? ''
 
@@ -282,7 +288,11 @@ function confirmDesign(): void {
 
   shipStore.finalizeDesign(repPlayerId, teamId, designs)
 
-  if (designTeamIndex.value < designerTeams.value.length - 1) {
+  if (isMultiplayer.value) {
+    // 多人模式: 仅本阵营完成设计，等待其他阵营
+    isReady.value = true
+    ElMessage.success('设计已提交，等待其他阵营准备就绪...')
+  } else if (designTeamIndex.value < designerTeams.value.length - 1) {
     designTeamIndex.value++
     ships.value = []
     selectedEquipment.value = null
@@ -734,7 +744,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
             </span>
           </div>
           <div class="design-actions">
-            <el-button type="primary" @click="addShip">添加舰船</el-button>
+            <el-button type="primary" @click="addShip" :disabled="isMultiplayer && isReady">添加舰船</el-button>
           </div>
         </div>
 
@@ -744,13 +754,13 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 
         <div v-for="(ship, si) in ships" :key="si" class="ship-designer">
           <div class="ship-header">
-            <el-input v-model="ship.name" size="small" style="width: 180px" />
+            <el-input v-model="ship.name" size="small" style="width: 180px" :disabled="isMultiplayer && isReady" />
             <span>舱段数: {{ ship.compartments.length }}</span>
-            <el-button size="small" @click="addCompartment(si)" :disabled="remainingCompartments < 1">
+            <el-button size="small" @click="addCompartment(si)" :disabled="(isMultiplayer && isReady) || remainingCompartments < 1">
               添加舱段
             </el-button>
             <el-button size="small" type="success" @click="saveShipAsPreset(si)">保存为预设</el-button>
-            <el-button size="small" type="danger" @click="removeShip(si)">移除舰船</el-button>
+            <el-button size="small" type="danger" @click="removeShip(si)" :disabled="isMultiplayer && isReady">移除舰船</el-button>
           </div>
 
           <div class="compartment-row">
@@ -790,14 +800,27 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
         </div>
 
         <div v-if="ships.length > 0" class="design-footer">
-          <el-button type="primary" size="large" @click="confirmDesign">
-            <template v-if="designTeamIndex < designerTeams.length - 1">
-              确认设计，下一个阵营
+          <!-- 多人模式: 准备就绪 -->
+          <template v-if="isMultiplayer">
+            <el-tag v-if="isReady" type="success" size="large" style="margin-right:12px">已准备就绪</el-tag>
+            <template v-if="isReady">
+              <el-button type="warning" @click="isReady = false; multiplayerClient.cancelReady()">取消准备</el-button>
             </template>
             <template v-else>
-              确认设计，选择出生点
+              <el-button type="primary" size="large" @click="multiplayerClient.setReady(); confirmDesign()">准备就绪</el-button>
             </template>
-          </el-button>
+          </template>
+          <!-- 热座模式: 确认设计 -->
+          <template v-else>
+            <el-button type="primary" size="large" @click="confirmDesign">
+              <template v-if="designTeamIndex < designerTeams.length - 1">
+                确认设计，下一个阵营
+              </template>
+              <template v-else>
+                确认设计，选择出生点
+              </template>
+            </el-button>
+          </template>
         </div>
       </main>
     </div>

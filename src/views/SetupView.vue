@@ -11,6 +11,7 @@ import type { GameMode } from '@/game/types'
 import { ElMessage } from 'element-plus'
 import MultiplayerLobby from '@/components/setup/MultiplayerLobby.vue'
 import type { RoomState } from '@shared/protocol'
+import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
 const router = useRouter()
 const gameStore = useGameStore()
@@ -90,6 +91,10 @@ function onMultiplayerStartDesign(room: RoomState): void {
     }
   }
   gameStore.initPlayers(playerConfigs)
+  // 设置多人客户端控制的玩家ID (按名称匹配)
+  const myName = localStorage.getItem('mp_playerName') || ''
+  const myPlayer = gameStore.players.find(p => p.name === myName)
+  if (myPlayer) { multiplayerClient.myPlayerId = myPlayer.id }
 
   shipStore.resetShipStore()
   combatStore.resetCombatStore()

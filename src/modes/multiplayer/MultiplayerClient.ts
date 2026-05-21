@@ -6,6 +6,10 @@ type Callback = (...args: any[]) => void
 export class MultiplayerClient {
   private socket: Socket | null = null
   private listeners = new Map<string, Set<Callback>>()
+  private _myPlayerId = ''
+
+  get myPlayerId(): string { return this._myPlayerId }
+  set myPlayerId(id: string) { this._myPlayerId = id }
 
   connect(): void {
     if (this.socket?.connected) return

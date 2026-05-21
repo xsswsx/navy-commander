@@ -28,7 +28,7 @@ export interface SlotState {
 // ==================== 客户端→服务端 ====================
 
 export type ClientToServerEvents = {
-  'room:create': (payload: { playerName: string }) => void
+  'room:create': (payload: { playerName: string; slots: { teamId: string; playerName: string }[] }) => void
   'room:join': (payload: { roomCode: string; playerName: string }) => void
   'room:leave': () => void
   'room:startDesign': (payload: { teamCount: number; totalCompartments: number; teams: { name: string; color: string }[] }) => void

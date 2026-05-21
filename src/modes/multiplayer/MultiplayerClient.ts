@@ -24,8 +24,8 @@ export class MultiplayerClient {
   get id(): string { return this.socket?.id ?? '' }
 
   // ===== 房间 =====
-  createRoom(playerName: string): void {
-    this.socket?.emit('room:create', { playerName })
+  createRoom(playerName: string, slots: { teamId: string; playerName: string }[]): void {
+    this.socket?.emit('room:create', { playerName, slots })
   }
 
   joinRoom(roomCode: string, playerName: string): void {

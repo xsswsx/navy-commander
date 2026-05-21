@@ -18,17 +18,16 @@ io.on('connection', (socket) => {
   console.log(`[connect] ${socket.id}`)
 
   // ===== 房间操作 =====
-  socket.on('room:create', ({ playerName }) => {
-    // 先清理旧房间
+  socket.on('room:create', ({ playerName, slots }) => {
     const prev = rooms.leaveRoom(socket.id)
     if (prev.room) {
       io.to(prev.room.code).emit('room:update', prev.room)
     }
 
-    const room = rooms.createRoom(socket.id, playerName)
+    const room = rooms.createRoom(socket.id, playerName, slots || [])
     socket.join(room.code)
     socket.emit('room:update', room)
-    console.log(`[room:create] ${room.code} by ${playerName}`)
+    console.log(`[room:create] ${room.code} by ${playerName} (${room.slots.length} slots)`)
   })
 
   socket.on('room:join', ({ roomCode, playerName }) => {

@@ -78,7 +78,11 @@ function selectMode(mode: GameMode): void {
 function onMultiplayerStartDesign(room: RoomState): void {
   gameStore.setMode('multiplayer')
   gameStore.setTotalCompartments(room.totalCompartments)
-  gameStore.initTeams(room.slots.map((s, i) => ({ name: s.teamId, color: TEAM_COLORS[i % TEAM_COLORS.length] })))
+
+  // 去重队伍
+  const uniqueTeams = [...new Set(room.slots.map(s => s.teamId))]
+  gameStore.initTeams(uniqueTeams.map((name, i) => ({ name, color: TEAM_COLORS[i % TEAM_COLORS.length] })))
+
   const playerConfigs: { name: string; teamId: string }[] = []
   for (const s of room.slots) {
     if (s.playerName) {

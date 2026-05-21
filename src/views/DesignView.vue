@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
 import { useCardStore } from '@/stores/card'
+import { useCombatStore } from '@/stores/combat'
 import { getAllEquipment, getEquipmentByCategory } from '@/game/equipment/registry'
 import { baseHp } from '@/game/constants'
 import type { EquipmentType, ShipDesign, DesignSlot } from '@/game/types'
@@ -14,6 +15,7 @@ const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
 const cardStore = useCardStore()
+const combatStore = useCombatStore()
 
 const allEquipment = getAllEquipment()
 const combatEquipment = getEquipmentByCategory('combat')
@@ -95,7 +97,29 @@ function onRemoteDesign(data: any): void {
 onMounted(() => {
   if (isMultiplayer.value) {
     multiplayerClient.onDesignSync(onRemoteDesign)
-    multiplayerClient.onAllReady(() => { allReady.value = true })
+    multiplayerClient.onAllReady((allDesigns: Record<string, any>) => {
+      // 将其他阵营的设计也 finalize (本阵营已在 prepare 时 finalize)
+      for (const [teamId, design] of Object.entries(allDesigns)) {
+        if (!design || !design.ships) continue
+        const existingShips = shipStore.ships.filter(s => s.ownerTeamId === teamId)
+        if (existingShips.length > 0) continue // 本阵营已 finalize, 跳过
+        const teamPlayers = gameStore.players.filter(p => p.teamId === teamId)
+        const repPlayerId = teamPlayers[0]?.id ?? ''
+        const designs: ShipDesign[] = design.ships.map((s: any) => ({
+          name: s.name,
+          compartmentCount: s.compartments.length,
+          slots: s.compartments
+            .filter((c: any) => c.equipmentType)
+            .map((c: any) => ({
+              compartmentIndex: c.compartmentIndex,
+              equipmentType: c.equipmentType!,
+            })),
+        }))
+        shipStore.finalizeDesign(repPlayerId, teamId, designs)
+        combatStore.log(`接收阵营 ${teamId} 的舰船设计 (${designs.length}艘)`, 'system')
+      }
+      allReady.value = true
+    })
     // 立即请求房间状态以显示准备指示灯
     multiplayerClient.requestRoomState()
     multiplayerClient.onRoomUpdate((r: any) => {

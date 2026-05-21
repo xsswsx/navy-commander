@@ -142,6 +142,16 @@ export class RoomManager {
     return assignedSlots.length > 0 && assignedSlots.every(s => s.isReady)
   }
 
+  getAllDesigns(roomCode: string): Record<string, import('../shared/protocol.js').DesignSyncPayload | null> {
+    const teamDesigns = this.designStates.get(roomCode)
+    if (!teamDesigns) return {}
+    const result: Record<string, any> = {}
+    for (const [teamId, design] of teamDesigns) {
+      result[teamId] = design
+    }
+    return result
+  }
+
   // ===== 设计阶段 =====
   private designStates = new Map<string, Map<string, DesignSyncPayload>>() // roomCode -> teamId -> design
 

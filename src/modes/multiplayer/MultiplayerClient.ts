@@ -90,7 +90,7 @@ export class MultiplayerClient {
   }
   onRoomError(cb: (err: { message: string }) => void): void { this.on('room:error', cb) }
   onDesignSync(cb: (data: DesignSyncPayload & { teamId: string }) => void): void { this.on('design:sync', cb) }
-  onAllReady(cb: () => void): void { this.on('design:allReady', cb) }
+  onAllReady(cb: (allDesigns?: any) => void): void { this.on('design:allReady', cb) }
   onBattleAction(cb: (action: BattleAction) => void): void { this.on('battle:action', cb) }
 }
 

@@ -108,7 +108,8 @@ io.on('connection', (socket) => {
     rooms.setReady(room, socket.id, true)
     io.to(room.code).emit('room:update', room)
     if (rooms.isAllReady(room)) {
-      io.to(room.code).emit('design:allReady')
+      const allDesigns = rooms.getAllDesigns(room.code)
+      io.to(room.code).emit('design:allReady', allDesigns)
       room.phase = 'battle'
       io.to(room.code).emit('room:update', room)
       console.log(`[design:allReady] room ${room.code}`)

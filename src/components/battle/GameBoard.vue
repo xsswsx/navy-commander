@@ -140,15 +140,27 @@ function getTorpedoInfo(compId: string): { source: string; count: number; turns:
     })
 }
 
-function getFighterGroups(shipId: string): { teamId: string; color: string; count: number }[] {
+function getFighterGroups(shipId: string): { teamId: string; color: string; count: number; players: string; minTurns: number }[] {
   const tokens = combatStore.fighterTokens.filter(t => t.shipId === shipId && t.occupiesSortie)
-  const groups = new Map<string, number>()
+  const groups = new Map<string, { count: number; players: Set<string>; minTurns: number }>()
   for (const t of tokens) {
-    groups.set(t.ownerTeamId, (groups.get(t.ownerTeamId) ?? 0) + 1)
+    const g = groups.get(t.ownerTeamId)
+    if (g) {
+      g.count++
+      g.players.add(t.sourcePlayerId)
+      g.minTurns = Math.min(g.minTurns, t.remainingTurns)
+    } else {
+      groups.set(t.ownerTeamId, {
+        count: 1,
+        players: new Set([t.sourcePlayerId]),
+        minTurns: t.remainingTurns,
+      })
+    }
   }
-  return [...groups.entries()].map(([teamId, count]) => {
+  return [...groups.entries()].map(([teamId, g]) => {
     const team = gameStore.teams.find(t2 => t2.id === teamId)
-    return { teamId, color: team?.color ?? '#888', count }
+    const playerNames = [...g.players].map(pid => gameStore.players.find(p => p.id === pid)?.name ?? '?').join(', ')
+    return { teamId, color: team?.color ?? '#888', count: g.count, players: playerNames, minTurns: g.minTurns }
   })
 }
 </script>
@@ -201,11 +213,21 @@ function getFighterGroups(shipId: string): { teamId: string; color: string; coun
             HP: {{ ship.compartments.reduce((s, c) => s + c.currentHp, 0) }}
           </span>
           <!-- 战斗机标识 -->
-          <template v-for="ftg in getFighterGroups(ship.id)" :key="ftg.teamId">
+          <el-tooltip
+            v-for="ftg in getFighterGroups(ship.id)"
+            :key="ftg.teamId"
+            placement="top"
+            effect="dark"
+          >
+            <template #content>
+              <div>✈ 战斗机 ({{ ftg.count }}架)</div>
+              <div>来源: {{ ftg.players }}</div>
+              <div>剩余: {{ ftg.minTurns }}回合</div>
+            </template>
             <span class="fighter-badge" :style="{ borderColor: ftg.color }">
               ✈{{ ftg.count }}
             </span>
-          </template>
+          </el-tooltip>
           <span
             v-if="isShipTargetable(ship.id)"
             class="target-ship-hint"

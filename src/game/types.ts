@@ -108,6 +108,8 @@ export interface FighterToken {
   ownerTeamId: string
   occupiesSortie: boolean
   sourceCompartmentId: string
+  sourcePlayerId: string
+  remainingTurns: number
 }
 
 export interface LogEntry {

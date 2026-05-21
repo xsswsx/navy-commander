@@ -140,6 +140,8 @@ function startDrawPhase(): void {
   combatStore.log(`${player.name} 在 ${comp ? getEquipment(comp.equipmentType!)?.name ?? '空舱段' : '?'} 抽 ${drawAmount} 张`, 'system')
   combatStore.resetPerTurnCounters()
   uiStore.resetBattleState()
+  // 移除本玩家派出的战斗机 (自己的回合再次开始时失效)
+  combatStore.removeFightersByPlayer(playerId)
   // 抽牌完成, 立即进入行动阶段
   gameStore.advancePhase()
 }
@@ -629,8 +631,8 @@ function executeTargetedCommand(
     case 'large_hangar': {
       const tgtShipId = targetId
       if (cmdId.includes('fighter')) {
-        combatStore.addFighterToken(tgtShipId, player.teamId, comp.id)
-        combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2`, 'effect')
+        combatStore.addFighterToken(tgtShipId, player.teamId, comp.id, playerId, gameStore.alivePlayerCount)
+        combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2 (${gameStore.alivePlayerCount}T后失效)`, 'effect')
       } else if (cmdId.includes('bomber')) {
         const nfa = getFullAirSuperiority(tgtShipId, player.teamId)
         const d12 = rollDice('D12')
@@ -862,6 +864,7 @@ function handleEndTurn(): void {
     ? shipStore.findShip(gameStore.currentPlayer.currentShipId) : null
   cardStore.discardDownTo(playerId, ship?.compartments.length ?? 5)
   combatStore.tickEffects()
+  combatStore.tickFighterTurns()
   combatStore.resetPerTurnCounters()
 
   for (const torp of combatStore.tickTorpedoes()) {

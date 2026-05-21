@@ -103,7 +103,9 @@ export const useCombatStore = defineStore('combat', () => {
   function addFighterToken(
     shipId: string,
     ownerTeamId: string,
-    sourceCompartmentId: string
+    sourceCompartmentId: string,
+    sourcePlayerId: string,
+    remainingTurns: number
   ): string {
     const id = `fighter_${++tokenIdCounter}`
     fighterTokens.value.push({
@@ -112,8 +114,22 @@ export const useCombatStore = defineStore('combat', () => {
       ownerTeamId,
       occupiesSortie: true,
       sourceCompartmentId,
+      sourcePlayerId,
+      remainingTurns,
     })
     return id
+  }
+
+  /** 移除指定玩家派出的所有战斗机 (该玩家回合开始时调用) */
+  function removeFightersByPlayer(playerId: string): void {
+    fighterTokens.value = fighterTokens.value.filter(t => t.sourcePlayerId !== playerId)
+  }
+
+  /** 每个回合结束时递减战斗机剩余回合 (0回合的在下个回合开始移除) */
+  function tickFighterTurns(): void {
+    for (const t of fighterTokens.value) {
+      if (t.remainingTurns > 0) t.remainingTurns--
+    }
   }
 
   function removeFighterToken(tokenId: string): void {
@@ -230,6 +246,8 @@ export const useCombatStore = defineStore('combat', () => {
     tickTorpedoes,
     addFighterToken,
     removeFighterToken,
+    removeFightersByPlayer,
+    tickFighterTurns,
     getOccupiedSortieCount,
     getAirSuperiority,
     log,

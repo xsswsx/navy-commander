@@ -739,14 +739,14 @@ function executeTargetedCommand(
       let totalNegated = 0
       let totalCount = 0
       for (const t of torps) {
-        for (let i = 0; i < t.torpedoCount; i++) {
+        const originalCount = t.torpedoCount
+        for (let i = 0; i < originalCount; i++) {
           totalCount++
           if (Math.random() < 0.5) {
             t.torpedoCount--
             totalNegated++
           }
         }
-        // 该鱼雷齐射中所有鱼雷都被拦截，移除该齐射
         if (t.torpedoCount <= 0) {
           combatStore.pendingTorpedoes = combatStore.pendingTorpedoes.filter(pt => pt.id !== t.id)
         }

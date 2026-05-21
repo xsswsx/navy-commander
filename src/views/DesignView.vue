@@ -25,8 +25,8 @@ const designTeamIndex = ref(0)
 const designerTeams = computed(() => gameStore.teams.map(t => t.id))
 const currentTeamId = computed(() => {
   if (isMultiplayer.value) {
-    // 多人模式: 当前玩家所属阵营
-    const myPlayer = gameStore.players.find(p => p.id === gameStore.currentPlayerId)
+    // 多人模式: 用 multiplayerClient.myPlayerId 找到当前会话的玩家
+    const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
     return myPlayer?.teamId ?? null
   }
   return designerTeams.value[designTeamIndex.value] ?? null
@@ -825,7 +825,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
                 HP: {{ compPreviewHP(si, ci) }}
               </div>
               <el-button
-                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null"
+                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null && !(isMultiplayer && isReady)"
                 class="slot-remove"
                 size="small"
                 type="danger"

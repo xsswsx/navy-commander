@@ -139,6 +139,18 @@ function getTorpedoInfo(compId: string): { source: string; count: number; turns:
       }
     })
 }
+
+function getFighterGroups(shipId: string): { teamId: string; color: string; count: number }[] {
+  const tokens = combatStore.fighterTokens.filter(t => t.shipId === shipId && t.occupiesSortie)
+  const groups = new Map<string, number>()
+  for (const t of tokens) {
+    groups.set(t.ownerTeamId, (groups.get(t.ownerTeamId) ?? 0) + 1)
+  }
+  return [...groups.entries()].map(([teamId, count]) => {
+    const team = gameStore.teams.find(t2 => t2.id === teamId)
+    return { teamId, color: team?.color ?? '#888', count }
+  })
+}
 </script>
 
 <template>
@@ -188,6 +200,12 @@ function getTorpedoInfo(compId: string): { source: string; count: number; turns:
           <span v-else class="ship-hp-sum">
             HP: {{ ship.compartments.reduce((s, c) => s + c.currentHp, 0) }}
           </span>
+          <!-- 战斗机标识 -->
+          <template v-for="ftg in getFighterGroups(ship.id)" :key="ftg.teamId">
+            <span class="fighter-badge" :style="{ borderColor: ftg.color }">
+              ✈{{ ftg.count }}
+            </span>
+          </template>
           <span
             v-if="isShipTargetable(ship.id)"
             class="target-ship-hint"
@@ -362,6 +380,18 @@ function getTorpedoInfo(compId: string): { source: string; count: number; turns:
 .ship-hp-sum {
   font-size: 11px;
   color: #6a8aaa;
+}
+
+.fighter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  padding: 1px 6px;
+  border: 1.5px solid #888;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  line-height: 1.3;
 }
 
 .target-ship-hint {

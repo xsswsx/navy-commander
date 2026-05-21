@@ -431,8 +431,10 @@ function enterCompartmentTargeting(comp: Compartment, cmdId: string, scope: stri
       validIds.push(...living.map(c => c.id))
     }
   } else if (scope === 'own-compartment') {
-    for (const s of shipStore.ships.filter(s => s.ownerTeamId === player.teamId)) {
-      const living = shipStore.getLivingCompartments(s.id)
+    // 指挥室/指挥中心: 仅限同一舰船
+    const sourceShip = shipStore.getShipByCompartment(comp.id)
+    if (sourceShip) {
+      const living = shipStore.getLivingCompartments(sourceShip.id)
       validIds.push(...living.map(c => c.id))
     }
   }
@@ -702,7 +704,6 @@ function executeTargetedCommand(
     }
 
     case 'depth_charge': {
-      // targetId 是选中的目标舰船ID
       const targetShip = shipStore.findShip(targetId)
       if (!targetShip) {
         ElMessage.warning('目标舰船不存在')
@@ -717,15 +718,24 @@ function executeTargetedCommand(
         combatStore.log(`深水炸弹: ${targetShip.name} 没有被鱼雷瞄准`, 'info')
         return
       }
-      let negated = 0
+      // 逐颗判定 — 每个鱼雷独立50%概率失效
+      let totalNegated = 0
+      let totalCount = 0
       for (const t of torps) {
-        if (Math.random() < 0.5) {
+        for (let i = 0; i < t.torpedoCount; i++) {
+          totalCount++
+          if (Math.random() < 0.5) {
+            t.torpedoCount--
+            totalNegated++
+          }
+        }
+        // 该鱼雷齐射中所有鱼雷都被拦截，移除该齐射
+        if (t.torpedoCount <= 0) {
           combatStore.pendingTorpedoes = combatStore.pendingTorpedoes.filter(pt => pt.id !== t.id)
-          negated++
         }
       }
-      combatStore.log(`深水炸弹 → ${targetShip.name}: ${negated}/${torps.length}颗鱼雷被拦截`, 'effect')
-      ElMessage.success(`${negated}/${torps.length}颗鱼雷被拦截`)
+      combatStore.log(`深水炸弹 → ${targetShip.name}: ${totalNegated}/${totalCount}颗鱼雷被拦截`, 'effect')
+      ElMessage.success(`${totalNegated}/${totalCount}颗鱼雷被拦截`)
       break
     }
 

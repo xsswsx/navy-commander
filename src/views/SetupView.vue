@@ -41,19 +41,22 @@ function initTeams(): void {
   for (let i = 0; i < teamCount.value; i++) {
     teams.push({ name: `队伍${i + 1}`, color: TEAM_COLORS[i] })
   }
-  // 每队默认1个玩家
+  playerNameCounter = 0
   for (let i = 0; i < teamCount.value; i++) {
     if (!playerNames[i]) playerNames[i] = []
     if (playerNames[i].length === 0) {
-      playerNames[i].push(`玩家${i + 1}`)
+      playerNameCounter++
+      playerNames[i].push(`玩家${playerNameCounter}`)
     }
   }
 }
 
+let playerNameCounter = 0
+
 function addPlayer(teamIndex: number): void {
   if (!playerNames[teamIndex]) playerNames[teamIndex] = []
-  const idx = playerNames[teamIndex].length
-  playerNames[teamIndex].push(`玩家${teamIndex * 10 + idx + 1}`)
+  playerNameCounter++
+  playerNames[teamIndex].push(`玩家${playerNameCounter}`)
 }
 
 function removePlayer(teamIndex: number, playerIndex: number): void {

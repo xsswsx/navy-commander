@@ -18,45 +18,7 @@ import CommandDialog from '@/components/battle/CommandDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
-const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
-
-// 多人模式: 发送战斗行动
-function sendBattleAction(action: any): void {
-  if (!isMultiplayer.value) return
-  multiplayerClient.sendBattleAction(action)
-}
-
-// 多人模式: 接收战斗行动
-function onRemoteBattleAction(action: any): void {
-  if (!isMultiplayer.value) return
-  // 简单中继: 将远程行动应用到本地 (权限由服务端控制)
-  switch (action.type) {
-    case 'playCard': handlePlayCard(action.cardId); break
-    case 'endTurn': handleEndTurn(); break
-  }
-}
-
-onMounted(() => {
-  if (isMultiplayer.value) {
-    multiplayerClient.onBattleAction(onRemoteBattleAction)
-  }
-})
-
-onUnmounted(() => {
-  if (isMultiplayer.value) {
-    multiplayerClient.off('battle:action', onRemoteBattleAction)
-    multiplayerClient.off('battle:turnChange', () => {})
-  }
-})
-
-// 多人模式: 监听服务端的回合变更通知
-if (isMultiplayer.value) {
-  multiplayerClient.on('battle:turnChange', (_data: any) => {
-    gameStore.advancePhase() // action → discard (or discard → next)
-    gameStore.advancePhase() // next → draw (triggers watcher)
-  })
-}
-
+// ===== 必须在最前面: Pinia stores =====
 const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
@@ -64,11 +26,13 @@ const cardStore = useCardStore()
 const combatStore = useCombatStore()
 const uiStore = useUiStore()
 
+// ===== 核心状态 (依赖 stores) =====
+const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
+
 const transitionVisible = ref(false)
 const transitionToName = ref('')
 const showSpawnDialog = ref(false)
 const spawnPlayerName = ref('')
-// 多人模式出生时用于模板的teamId (不能用 currentPlayer, 因为可能指向其他玩家)
 const spawningPlayerTeamId = computed(() => {
   if (isMultiplayer.value) {
     const p = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
@@ -94,6 +58,30 @@ function checkPermission(): boolean {
     return false
   }
   return true
+}
+
+// 多人模式: 发送战斗行动给服务端
+function sendBattleAction(action: any): void {
+  if (!isMultiplayer.value) return
+  multiplayerClient.sendBattleAction(action)
+}
+
+// 多人模式: 接收远程战斗行动
+function onRemoteBattleAction(action: any): void {
+  if (!isMultiplayer.value) return
+  switch (action.type) {
+    case 'playCard': handlePlayCard(action.cardId); break
+    case 'endTurn': handleEndTurn(); break
+  }
+}
+
+// 多人模式初始化: 注册事件监听
+if (isMultiplayer.value) {
+  multiplayerClient.onBattleAction(onRemoteBattleAction)
+  multiplayerClient.on('battle:turnChange', () => {
+    gameStore.advancePhase()
+    gameStore.advancePhase()
+  })
 }
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====

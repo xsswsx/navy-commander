@@ -52,7 +52,9 @@ export interface ShipDesignData {
   compartments: { compartmentIndex: number; equipmentType: string | null }[]
 }
 
-export type BattleAction =
+export type BattleAction = {
+  senderPlayerId?: string
+} & (
   | { type: 'playCard'; cardId: string }
   | { type: 'freeAction'; actionType: 'move' | 'command' | 'pass' }
   | { type: 'selectTarget'; compartmentId: string }
@@ -60,6 +62,7 @@ export type BattleAction =
   | { type: 'selectCommand'; commandId: string }
   | { type: 'selectSpawn'; compartmentId: string }
   | { type: 'endTurn' }
+)
 
 // ==================== 服务端→客户端 ====================
 

@@ -60,28 +60,74 @@ function checkPermission(): boolean {
   return true
 }
 
-// 多人模式: 发送战斗行动给服务端
-function sendBattleAction(action: any): void {
+// 多人模式: 发送行动到服务端 (不自执行, 等服务端广播回来)
+function mpSend(action: any): void {
   if (!isMultiplayer.value) return
   multiplayerClient.sendBattleAction(action)
 }
 
-// 多人模式: 接收远程战斗行动
+// 多人模式: 收到服务端广播的行动, 所有客户端统一执行
 function onRemoteBattleAction(action: any): void {
   if (!isMultiplayer.value) return
+  // 跳过自己发送的行动(避免重复执行) — 已由 handle* 函数本地执行
+  // 但出生点和回合结束需要所有客户端都执行
   switch (action.type) {
-    case 'playCard': handlePlayCard(action.cardId); break
-    case 'endTurn': handleEndTurn(); break
+    case 'selectSpawn':
+      applySpawnSelect(action.compartmentId, action.senderPlayerId)
+      break
+    case 'endTurn':
+      applyEndTurn()
+      break
+    case 'playCard':
+      applyPlayCard(action.cardId)
+      break
+    case 'freeAction':
+      applyFreeAction(action.actionType)
+      break
   }
+}
+
+function applySpawnSelect(compartmentId: string, playerName: string): void {
+  const player = gameStore.players.find(p => p.name === playerName)
+  if (!player) return
+  const ship = shipStore.getShipByCompartment(compartmentId)
+  if (!ship) return
+  const comp = ship.compartments.find(c => c.id === compartmentId)
+  if (!comp) return
+  player.currentShipId = ship.id
+  player.currentCompartmentIndex = comp.position
+  combatStore.log(`${player.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
+}
+
+function applyEndTurn(): void {
+  if (gameStore.currentTurnPhase === 'action') {
+    gameStore.advancePhase() // action → discard
+  }
+  if (gameStore.currentTurnPhase === 'discard') {
+    gameStore.advancePhase() // discard → next
+  }
+}
+
+function applyPlayCard(cardId: string): void {
+  const playerId = gameStore.currentPlayerId!
+  const card = cardStore.getPlayerHand(playerId).find(c => c.id === cardId)
+  if (!card) return
+  if (card.type === 'coffee') {
+    cardStore.removeCardFromHand(playerId, cardId)
+    cardStore.playerDrawCards(playerId, 2)
+    combatStore.log(`${gameStore.currentPlayer?.name} 使用咖啡，抽2张牌`, 'system')
+  }
+  // 其他卡牌类型在 handlePlayCard 中已被本地处理
+}
+
+function applyFreeAction(actionType: string): void {
+  gameStore.useFreeAction()
+  combatStore.log(`${gameStore.currentPlayer?.name} 使用了自由行动: ${actionType}`, 'system')
 }
 
 // 多人模式初始化: 注册事件监听
 if (isMultiplayer.value) {
   multiplayerClient.onBattleAction(onRemoteBattleAction)
-  multiplayerClient.on('battle:turnChange', () => {
-    gameStore.advancePhase()
-    gameStore.advancePhase()
-  })
 }
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
@@ -175,6 +221,7 @@ function handleSpawnSelect(compartmentId: string): void {
     myPlayer.currentCompartmentIndex = comp.position
     combatStore.log(`${myPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
     showSpawnDialog.value = false
+    mpSend({ type: 'selectSpawn', compartmentId })
     startDrawPhase()
     return
   }
@@ -250,6 +297,7 @@ function startDrawPhase(): void {
 // ===== 卡牌点击 → state machine =====
 function handlePlayCard(cardId: string): void {
   if (!checkPermission()) return
+  if (isMultiplayer.value) { mpSend({ type: 'playCard', cardId }) }
   if (uiStore.battleState !== 'idle') {
     ElMessage.warning('请先完成当前操作或取消')
     return
@@ -321,6 +369,7 @@ function handleFreeMove(): void {
   if (!checkPermission()) return
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
+  if (isMultiplayer.value) { mpSend({ type: 'freeAction', actionType: 'move' }) }
   uiStore.clearCardSelection()
   uiStore.pendingAction = 'move'
   uiStore.isFreeAction = true
@@ -329,8 +378,10 @@ function handleFreeMove(): void {
 }
 
 function handleFreeCommand(): void {
+  if (!checkPermission()) return
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
+  if (isMultiplayer.value) { mpSend({ type: 'freeAction', actionType: 'command' }) }
   uiStore.clearCardSelection()
   uiStore.pendingAction = 'command'
   uiStore.isFreeAction = true

@@ -139,18 +139,18 @@ io.on('connection', (socket) => {
     socket.to(room.code).emit('design:sync', { ...design, teamId: slot.teamId })
   })
 
-  // ===== 战斗行动中继 =====
+  // ===== 战斗行动中继 (全房间广播, 服务端为唯一权威) =====
   socket.on('battle:action', (action) => {
     const room = rooms.getRoomBySocket(socket.id)
     if (!room) return
-    if (action.type === 'endTurn') {
-      // 回合结束: 广播给所有客户端推进回合
-      io.to(room.code).emit('battle:turnChange', { fromSocket: socket.id })
-      console.log(`[battle:endTurn] room ${room.code} by ${socket.id}`)
-    } else {
-      // 其他行动: 广播给其他客户端
-      socket.to(room.code).emit('battle:action', action)
+    // 附加发送者信息
+    const player = room.players.find(p => p.socketId === socket.id)
+    if (player && player.slotIndex != null) {
+      action.senderPlayerId = room.slots[player.slotIndex]?.playerName ?? ''
     }
+    // 全房间广播 (含发送者自身)
+    io.to(room.code).emit('battle:action', action)
+    console.log(`[battle:action] room ${room.code} type=${action.type}`)
   })
 
   // ===== 断开连接 =====

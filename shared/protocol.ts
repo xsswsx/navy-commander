@@ -81,6 +81,7 @@ export type ServerToClientEvents = {
   'battle:log': (entry: { message: string; type: string }) => void
   'battle:turnChange': (payload: { playerId: string; playerName: string; phase: string }) => void
   'battle:action': (action: BattleAction) => void
+  'battle:init': (payload: BattleInitPayload) => void
 }
 
 // ==================== 类型工具 ====================
@@ -92,4 +93,15 @@ export function generateRoomCode(): string {
     code += chars[Math.floor(Math.random() * chars.length)]
   }
   return code
+}
+
+// ==================== 多人模式战斗初始化协议 ====================
+export interface BattleInitPayload {
+  ships: any[]
+  playerHands: Record<string, any[]>
+  players: any[]
+  teams: any[]
+  turnOrder: string[]
+  currentTurnIndex: number
+  currentTurnPhase: string
 }

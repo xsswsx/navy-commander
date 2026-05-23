@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client'
-import type { RoomState, DesignSyncPayload, BattleAction, SlotState } from '@shared/protocol'
+import type { RoomState, DesignSyncPayload, BattleAction, SlotState, BattleInitPayload } from '@shared/protocol'
 
 type Callback = (...args: any[]) => void
 
@@ -92,6 +92,7 @@ export class MultiplayerClient {
   onDesignSync(cb: (data: DesignSyncPayload & { teamId: string }) => void): void { this.on('design:sync', cb) }
   onAllReady(cb: (allDesigns?: any) => void): void { this.on('design:allReady', cb) }
   onBattleAction(cb: (action: BattleAction) => void): void { this.on('battle:action', cb) }
+  onBattleInit(cb: (payload: BattleInitPayload) => void): void { this.on('battle:init', cb) }
 }
 
 export const multiplayerClient = new MultiplayerClient()

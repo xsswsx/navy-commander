@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -16,9 +16,7 @@ import CombatLog from '@/components/battle/CombatLog.vue'
 import TurnTransition from '@/components/mode-specific/hotseat/TurnTransition.vue'
 import CommandDialog from '@/components/battle/CommandDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
-// ===== 必须在最前面: Pinia stores =====
 const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
@@ -26,145 +24,20 @@ const cardStore = useCardStore()
 const combatStore = useCombatStore()
 const uiStore = useUiStore()
 
-// ===== 核心状态 (依赖 stores) =====
-const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
-
 const transitionVisible = ref(false)
 const transitionToName = ref('')
 const showSpawnDialog = ref(false)
 const spawnPlayerName = ref('')
-const spawningPlayerTeamId = computed(() => {
-  if (isMultiplayer.value) {
-    const p = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
-    return p?.teamId ?? ''
-  }
-  return gameStore.currentPlayer?.teamId ?? ''
-})
 const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
-const spawnIndex = ref(0)
-const battleInitReceived = ref(false)
-
-// 多人模式权限检查
-function canAct(): boolean {
-  if (!isMultiplayer.value) return true
-  return gameStore.currentPlayerId === multiplayerClient.myPlayerId
-}
-
-function checkPermission(): boolean {
-  if (!isMultiplayer.value) return true
-  if (!canAct()) {
-    ElMessage.warning('等待其他玩家操作...')
-    return false
-  }
-  return true
-}
-
-// 多人模式: 发送行动到服务端 (不自执行, 等服务端广播回来)
-function mpSend(action: any): void {
-  if (!isMultiplayer.value) return
-  multiplayerClient.sendBattleAction(action)
-}
-
-// 多人模式: 收到服务端广播的行动, 所有客户端统一执行
-function onRemoteBattleAction(action: any): void {
-  if (!isMultiplayer.value) return
-  // 跳过自己发送的行动(避免重复执行) — 已由 handle* 函数本地执行
-  // 但出生点和回合结束需要所有客户端都执行
-  switch (action.type) {
-    case 'selectSpawn':
-      applySpawnSelect(action.compartmentId, action.senderPlayerId)
-      break
-    case 'endTurn':
-      applyEndTurn()
-      break
-    case 'playCard':
-      applyPlayCard(action.cardId)
-      break
-    case 'freeAction':
-      applyFreeAction(action.actionType)
-      break
-  }
-}
-
-function applySpawnSelect(compartmentId: string, playerName: string): void {
-  const player = gameStore.players.find(p => p.name === playerName)
-  if (!player) return
-  const ship = shipStore.getShipByCompartment(compartmentId)
-  if (!ship) return
-  const comp = ship.compartments.find(c => c.id === compartmentId)
-  if (!comp) return
-  player.currentShipId = ship.id
-  player.currentCompartmentIndex = comp.position
-  combatStore.log(`${player.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
-}
-
-function applyEndTurn(): void {
-  if (gameStore.currentTurnPhase === 'action') {
-    gameStore.advancePhase() // action → discard
-  }
-  if (gameStore.currentTurnPhase === 'discard') {
-    gameStore.advancePhase() // discard → next
-  }
-}
-
-function applyPlayCard(cardId: string): void {
-  const playerId = gameStore.currentPlayerId!
-  const card = cardStore.getPlayerHand(playerId).find(c => c.id === cardId)
-  if (!card) return
-  if (card.type === 'coffee') {
-    cardStore.removeCardFromHand(playerId, cardId)
-    cardStore.playerDrawCards(playerId, 2)
-    combatStore.log(`${gameStore.currentPlayer?.name} 使用咖啡，抽2张牌`, 'system')
-  }
-  // 其他卡牌类型在 handlePlayCard 中已被本地处理
-}
-
-function applyFreeAction(actionType: string): void {
-  gameStore.useFreeAction()
-  combatStore.log(`${gameStore.currentPlayer?.name} 使用了自由行动: ${actionType}`, 'system')
-}
-
-/** 多人模式: 收到服务端 battle:init 全量初始状态, 写入 Pinia 各 store */
-function handleBattleInit(payload: any): void {
-  console.log('[BattleView] battle:init received', payload)
-  shipStore.ships = payload.ships
-  cardStore.playerHands = payload.playerHands
-  gameStore.players = payload.players
-  gameStore.teams = payload.teams
-  gameStore.turnOrder = payload.turnOrder
-  gameStore.currentTurnIndex = payload.currentTurnIndex
-  gameStore.currentTurnPhase = payload.currentTurnPhase
-  battleInitReceived.value = true
-  // 如果组件已挂载且正处于 battle 阶段，触发出生点流程
-  if (gameStore.phase === 'battle') {
-    spawnMultiplayer()
-  }
-}
-
-// 多人模式初始化: 注册事件监听
-if (isMultiplayer.value) {
-  multiplayerClient.onBattleAction(onRemoteBattleAction)
-  multiplayerClient.onBattleInit(handleBattleInit)
-}
+const spawnIndex = ref(0) // 出生点选择阶段: 当前正在选出生的玩家在turnOrder中的索引
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
 
 onMounted(() => {
-  console.log('[BattleView] mounted mode=', gameStore.mode, 'phase=', gameStore.phase,
-    'players=', gameStore.players.length, 'ships=', shipStore.ships.length,
-    'myId=', multiplayerClient.myPlayerId)
   if (gameStore.phase === 'battle') {
-    if (isMultiplayer.value) {
-      // 多人模式必须等待服务端 battle:init 全量数据到达后才启动出生点流程
-      if (battleInitReceived.value) {
-        spawnMultiplayer()
-      }
-      // 数据尚未到达 → handleBattleInit() 收到 payload 后会自动调 spawnMultiplayer()
-    } else {
-      startSpawnPhase()
-    }
+    startSpawnPhase()
   }
 })
 
@@ -203,21 +76,6 @@ function showSpawnForCurrent(): void {
   }
 }
 
-function spawnMultiplayer(): void {
-  const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
-  if (!myPlayer || myPlayer.currentShipId) {
-    startDrawPhase()
-    return
-  }
-  spawnPlayerName.value = myPlayer.name
-  const playerShips = shipStore.ships.filter(s => s.ownerTeamId === myPlayer.teamId)
-  if (playerShips.length === 0) {
-    startDrawPhase()
-    return
-  }
-  showSpawnDialog.value = true
-}
-
 function onTransitionConfirm(): void {
   transitionVisible.value = false
   // 区分出生阶段与正常回合阶段
@@ -232,24 +90,6 @@ function onTransitionConfirm(): void {
 }
 
 function handleSpawnSelect(compartmentId: string): void {
-  // 多人模式: 只为自己选出生点, 然后直接开始回合
-  if (isMultiplayer.value) {
-    const myPlayer = gameStore.players.find(p => p.id === multiplayerClient.myPlayerId)
-    if (!myPlayer) return
-    const ship = shipStore.getShipByCompartment(compartmentId)
-    if (!ship) return
-    const comp = ship.compartments.find(c => c.id === compartmentId)
-    if (!comp) return
-    myPlayer.currentShipId = ship.id
-    myPlayer.currentCompartmentIndex = comp.position
-    combatStore.log(`${myPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
-    showSpawnDialog.value = false
-    mpSend({ type: 'selectSpawn', compartmentId })
-    startDrawPhase()
-    return
-  }
-
-  // 热座: 按顺序为所有玩家选出生点
   const playerIds = gameStore.turnOrder
   const pid = playerIds[spawnIndex.value]
   const player = gameStore.players.find(p => p.id === pid)
@@ -270,29 +110,18 @@ function handleSpawnSelect(compartmentId: string): void {
 // ===== 回合切换 (出生完毕后) =====
 watch(() => gameStore.currentPlayerId, (newId, oldId) => {
   if (oldId && newId && gameStore.phase === 'battle') {
-    if (isMultiplayer.value) {
-      // 多人: 直接进入回合, 不弹遮罩
-      startDrawPhase()
-    } else {
-      const player = gameStore.players.find(p => p.id === newId)
-      if (player) {
-        transitionToName.value = player.name
-        transitionVisible.value = true
-        combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
-      }
+    const player = gameStore.players.find(p => p.id === newId)
+    if (player) {
+      transitionToName.value = player.name
+      transitionVisible.value = true
+      combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
     }
   }
 })
 
 watch(() => gameStore.currentTurnPhase, (phase) => {
   if (phase === 'draw' && gameStore.phase === 'battle') {
-    if (isMultiplayer.value) {
-      if (gameStore.currentPlayerId === multiplayerClient.myPlayerId) {
-        startDrawPhase()
-      }
-    } else {
-      startDrawPhase()
-    }
+    startDrawPhase()
   }
 })
 
@@ -319,8 +148,6 @@ function startDrawPhase(): void {
 
 // ===== 卡牌点击 → state machine =====
 function handlePlayCard(cardId: string): void {
-  if (!checkPermission()) return
-  if (isMultiplayer.value) { mpSend({ type: 'playCard', cardId }) }
   if (uiStore.battleState !== 'idle') {
     ElMessage.warning('请先完成当前操作或取消')
     return
@@ -389,10 +216,8 @@ function handleSchemeCard(cardId: string): void {
 
 // ===== 自由行动 =====
 function handleFreeMove(): void {
-  if (!checkPermission()) return
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
-  if (isMultiplayer.value) { mpSend({ type: 'freeAction', actionType: 'move' }) }
   uiStore.clearCardSelection()
   uiStore.pendingAction = 'move'
   uiStore.isFreeAction = true
@@ -401,10 +226,8 @@ function handleFreeMove(): void {
 }
 
 function handleFreeCommand(): void {
-  if (!checkPermission()) return
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
-  if (isMultiplayer.value) { mpSend({ type: 'freeAction', actionType: 'command' }) }
   uiStore.clearCardSelection()
   uiStore.pendingAction = 'command'
   uiStore.isFreeAction = true
@@ -1066,12 +889,7 @@ function handleEndTurn(): void {
   }
 
   uiStore.resetBattleState()
-  if (isMultiplayer.value) {
-    // 多人: 通知服务端回合结束, 等待服务端广播 turnChange
-    multiplayerClient.sendBattleAction({ type: 'endTurn' })
-    return
-  }
-  // 热座: 本地推进回合
+  // 跳转到下一位玩家: 确保从action出发 (action → discard → next)
   if (gameStore.currentTurnPhase === 'action') {
     gameStore.advancePhase() // action → discard
   }
@@ -1088,7 +906,7 @@ watch(() => gameStore.phase, p => { if (p === 'results') router.push('/results')
     <!-- 出生点 -->
     <el-dialog v-model="showSpawnDialog" :title="`${spawnPlayerName} — 选择出生点`" width="500px" :close-on-click-modal="false" :show-close="false">
       <div class="spawn-grid">
-        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === spawningPlayerTeamId)" :key="ship.id" class="spawn-ship">
+        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === (gameStore.players.find(p => p.id === gameStore.turnOrder[spawnIndex])?.teamId ?? ''))" :key="ship.id" class="spawn-ship">
           <h4>{{ ship.name }}</h4>
           <div class="spawn-comps">
             <div v-for="comp in ship.compartments" :key="comp.id" class="spawn-comp"

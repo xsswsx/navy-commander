@@ -1,11 +1,9 @@
 import { computed } from 'vue'
 import { useGameStore } from '@/stores/game'
 import { HotseatAdapter } from '@/modes/hotseat/HotseatAdapter'
-import { MultiplayerAdapter } from '@/modes/multiplayer/MultiplayerAdapter'
 import type { IGameModeAdapter } from '@/modes/types'
 
 const hotseatAdapter = new HotseatAdapter()
-const multiplayerAdapter = new MultiplayerAdapter()
 
 export function useGameMode() {
   const gameStore = useGameStore()
@@ -14,8 +12,6 @@ export function useGameMode() {
     switch (gameStore.mode) {
       case 'hotseat':
         return hotseatAdapter
-      case 'multiplayer':
-        return multiplayerAdapter
       default:
         return hotseatAdapter
     }
@@ -24,10 +20,7 @@ export function useGameMode() {
   return { adapter }
 }
 
+/** 直接获取热座适配器实例 (用于调用 confirmTransition 等特定方法) */
 export function getHotseatAdapter(): HotseatAdapter {
   return hotseatAdapter
-}
-
-export function getMultiplayerAdapter(): MultiplayerAdapter {
-  return multiplayerAdapter
 }

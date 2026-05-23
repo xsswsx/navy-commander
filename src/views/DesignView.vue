@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -8,11 +8,15 @@ import { getAllEquipment, getEquipmentByCategory } from '@/game/equipment/regist
 import { baseHp } from '@/game/constants'
 import type { EquipmentType, ShipDesign, DesignSlot } from '@/game/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
 const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
 const cardStore = useCardStore()
+const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
+const isReady = ref(false)
+const mpSlots = ref<any[]>([])
 
 const allEquipment = getAllEquipment()
 const combatEquipment = getEquipmentByCategory('combat')
@@ -48,7 +52,51 @@ const remainingCompartments = computed(() => teamCompartmentBudget.value - usedC
 
 const selectedEquipment = ref<EquipmentType | null>(null)
 
+// ===== 多人模式 =====
+onMounted(() => {
+  if (!isMultiplayer.value) return
+  multiplayerClient.onRoomState((r) => { mpSlots.value = r.slots || [] })
+  multiplayerClient.onDesignState((d) => {
+    ships.value = d.ships.map((s: any) => ({
+      name: s.name,
+      compartments: s.compartments.map((c: any) => ({
+        compartmentIndex: c.compartmentIndex,
+        equipmentType: c.equipmentType as EquipmentType | null,
+        slaveOfSlot: null as number | null,
+        slaveIndices: [] as number[],
+      })),
+    }))
+    for (let i = 0; i < ships.value.length; i++) rebuildMultiComp(i)
+  })
+})
+
+function mpSync(): void {
+  if (!isMultiplayer.value || isReady.value) return
+  multiplayerClient.sendDesignUpdate(ships.value.map(s => ({
+    name: s.name,
+    compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
+  })))
+}
+
+watch(ships, () => { mpSync() }, { deep: true })
+
+function mpReady(): void {
+  if (!validateDesign()) { ElMessage.warning('设计不符合要求'); return }
+  if (!currentTeam.value) return
+  confirmDesign()
+  multiplayerClient.setReady()
+  isReady.value = true
+}
+
+function mpCancelReady(): void {
+  multiplayerClient.cancelReady()
+  isReady.value = false
+}
+
+const designLocked = computed(() => isMultiplayer.value && isReady.value)
+
 function addShip(): void {
+  if (designLocked.value) return
   ships.value.push({ name: `舰船${ships.value.length + 1}`, compartments: [] })
 }
 
@@ -223,6 +271,9 @@ function confirmDesign(): void {
   }))
 
   shipStore.finalizeDesign(repPlayerId, teamId, designs)
+
+  // 多人模式: 不自动推进, 等服务端 allReady → battle:init
+  if (isMultiplayer.value) return
 
   if (designTeamIndex.value < designerTeams.value.length - 1) {
     designTeamIndex.value++
@@ -668,6 +719,14 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
                 ({{ gameStore.players.filter(p => p.teamId === currentTeam!.id).map(p => p.name).join(', ') }})
               </span>
             </h2>
+            <div v-if="isMultiplayer && mpSlots.length" class="mp-lights">
+              <span v-for="tid in [...new Set(mpSlots.map((s:any)=>s.teamId))]" :key="tid" class="mp-light-group">
+                <span style="font-size:11px;color:#6a8aaa">{{ tid }}</span>
+                <span v-for="s in mpSlots.filter((s:any)=>s.teamId===tid)" :key="s.index"
+                  class="mp-dot" :class="{ on: s.isReady }"
+                  :title="(s.playerName||'空')+(s.isReady?' ✓':'')">●</span>
+              </span>
+            </div>
           </div>
           <div class="budget-info">
             <span>舱段配额: {{ usedCompartments }} / {{ teamCompartmentBudget }}</span>
@@ -732,14 +791,17 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
         </div>
 
         <div v-if="ships.length > 0" class="design-footer">
-          <el-button type="primary" size="large" @click="confirmDesign">
-            <template v-if="designTeamIndex < designerTeams.length - 1">
-              确认设计，下一个阵营
-            </template>
-            <template v-else>
-              确认设计，选择出生点
-            </template>
-          </el-button>
+          <template v-if="isMultiplayer">
+            <el-tag v-if="isReady" type="success" size="large" style="margin-right:8px">已准备</el-tag>
+            <el-button v-if="isReady" type="warning" @click="mpCancelReady">取消准备</el-button>
+            <el-button v-else type="primary" size="large" @click="mpReady">准备就绪</el-button>
+          </template>
+          <template v-else>
+            <el-button type="primary" size="large" @click="confirmDesign">
+              <template v-if="designTeamIndex < designerTeams.length - 1">确认设计，下一个阵营</template>
+              <template v-else>确认设计，选择出生点</template>
+            </el-button>
+          </template>
         </div>
       </main>
     </div>
@@ -1040,4 +1102,9 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
   color: #4a6a8a;
   font-size: 16px;
 }
+
+.mp-lights { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.mp-light-group { display: flex; align-items: center; gap: 2px; }
+.mp-dot { font-size: 14px; color: #2a3a5f; transition: color 0.3s; }
+.mp-dot.on { color: #67c23a; text-shadow: 0 0 6px rgba(103,194,58,0.5); }
 </style>

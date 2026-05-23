@@ -44,6 +44,7 @@ const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
 const spawnIndex = ref(0)
+const battleInitReceived = ref(false)
 
 // 多人模式权限检查
 function canAct(): boolean {
@@ -125,9 +126,27 @@ function applyFreeAction(actionType: string): void {
   combatStore.log(`${gameStore.currentPlayer?.name} 使用了自由行动: ${actionType}`, 'system')
 }
 
+/** 多人模式: 收到服务端 battle:init 全量初始状态, 写入 Pinia 各 store */
+function handleBattleInit(payload: any): void {
+  console.log('[BattleView] battle:init received', payload)
+  shipStore.ships = payload.ships
+  cardStore.playerHands = payload.playerHands
+  gameStore.players = payload.players
+  gameStore.teams = payload.teams
+  gameStore.turnOrder = payload.turnOrder
+  gameStore.currentTurnIndex = payload.currentTurnIndex
+  gameStore.currentTurnPhase = payload.currentTurnPhase
+  battleInitReceived.value = true
+  // 如果组件已挂载且正处于 battle 阶段，触发出生点流程
+  if (gameStore.phase === 'battle') {
+    spawnMultiplayer()
+  }
+}
+
 // 多人模式初始化: 注册事件监听
 if (isMultiplayer.value) {
   multiplayerClient.onBattleAction(onRemoteBattleAction)
+  multiplayerClient.onBattleInit(handleBattleInit)
 }
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
@@ -138,7 +157,11 @@ onMounted(() => {
     'myId=', multiplayerClient.myPlayerId)
   if (gameStore.phase === 'battle') {
     if (isMultiplayer.value) {
-      spawnMultiplayer()
+      // 多人模式必须等待服务端 battle:init 全量数据到达后才启动出生点流程
+      if (battleInitReceived.value) {
+        spawnMultiplayer()
+      }
+      // 数据尚未到达 → handleBattleInit() 收到 payload 后会自动调 spawnMultiplayer()
     } else {
       startSpawnPhase()
     }

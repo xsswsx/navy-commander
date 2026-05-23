@@ -138,6 +138,14 @@ io.on('connection', (socket) => {
     return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
   }
 
+  socket.on('battle:request', () => {
+    const slot = getMySlot(socket.id)
+    if (!slot) return
+    const room = getRoom(slot.code)
+    if (!room || !room.lastBattleInit) return
+    socket.emit('battle:init', room.lastBattleInit)
+  })
+
   socket.on('battle:spawn', ({ compartmentId }) => {
     const slot = getMySlot(socket.id)
     if (!slot) return
@@ -214,6 +222,7 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     for (const [teamId, ds] of room.designs) {
       if (ds.ships.length > 0) initPayload.ships[teamId] = ds.ships
     }
+    room.lastBattleInit = initPayload
     io.to(code).emit('battle:init', initPayload)
     io.to(code).emit('room:state', room.state)
     console.log(`[battle:init] room ${code}`)

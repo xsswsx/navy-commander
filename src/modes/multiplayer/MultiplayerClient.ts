@@ -26,6 +26,7 @@ export class MultiplayerClient {
   sendDesignUpdate(ships: ShipDesignData[]): void { this.socket?.emit('design:update', ships) }
   setReady(): void { this.socket?.emit('design:ready') }
   cancelReady(): void { this.socket?.emit('design:cancel') }
+  requestBattleInit(): void { this.socket?.emit('battle:request') }
   sendSpawn(compId: string): void { this.socket?.emit('battle:spawn', { compartmentId: compId }) }
   sendEndTurn(): void { this.socket?.emit('battle:endTurn') }
   sendAction(action: BattleAction): void { this.socket?.emit('battle:action', action) }

@@ -10,6 +10,7 @@ export interface ServerRoom {
   designs: Map<string, DesignState>    // teamId → DesignState
   spawns: Map<number, { shipId: string; compIndex: number }> // slotIndex → spawn
   currentTurnSlot: number
+  lastBattleInit: any                  // 缓存最近一次 battle:init payload
   battleLog: { message: string; type: string; timestamp: number }[]
 }
 

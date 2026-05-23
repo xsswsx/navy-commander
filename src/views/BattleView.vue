@@ -44,51 +44,51 @@ const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
 const spawnIndex = ref(0)
 const myTeamId = computed(() => {
-  if (isMP.value) {
+  if (isMP.value && mySlotIndex.value >= 0) {
     const p = gameStore.players[mySlotIndex.value]
     return p?.teamId ?? ''
   }
   return gameStore.currentPlayer?.teamId ?? ''
-}) // 出生点选择阶段: 当前正在选出生的玩家在turnOrder中的索引
+})
 
-// ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
+// ===== 多人模式: 提前注册 battle:init 监听 (在 onMounted 之前) =====
+function loadBattleInit(payload: any): void {
+  for (const [teamId, ships] of Object.entries(payload.ships)) {
+    const rep = payload.players.find((p:any) => p.teamId === teamId)
+    shipStore.finalizeDesign(rep?.name ?? '', teamId, ships as any)
+  }
+  if (gameStore.players.length === 0) {
+    gameStore.initTeams(payload.teams.map((t:any) => ({ name: t.id, color: t.color })))
+    gameStore.initPlayers(payload.players.map((p:any) => ({ name: p.name, teamId: p.teamId })))
+  }
+  // 通过 playerName 匹配找到本客户端槽位
+  const mySlot = payload.players.find((p:any) => p.slotIndex >= 0)
+  mySlotIndex.value = mySlot?.slotIndex ?? 0
+  if (Object.keys(payload.playerHands).length === 0) {
+    cardStore.dealInitialHands(gameStore.players.map((p:any) => p.id))
+  }
+  combatStore.log('战斗开始! 请选择出生点', 'system')
+  const myPlayer = gameStore.players[mySlotIndex.value]
+  if (myPlayer && !myPlayer.currentShipId) {
+    const myShips = shipStore.ships.filter((s:any) => s.ownerTeamId === myPlayer.teamId)
+    if (myShips.length > 0) {
+      spawnPlayerName.value = myPlayer.name
+      showSpawnDialog.value = true
+    }
+  }
+}
 
+if (isMP.value) {
+  multiplayerClient.onBattleInit(loadBattleInit)
+  multiplayerClient.onBattleTurn((t) => { currentTurnSlot.value = t.playerSlotIndex })
+  multiplayerClient.onBattleAction((_a) => { /* 远程操作 */ })
+}
+
+// ===== 战斗开始 =====
 onMounted(() => {
   if (gameStore.phase === 'battle') {
     if (isMP.value) {
-      // 多人模式: 等待服务端 battle:init
-      multiplayerClient.onBattleInit((payload) => {
-        // 加载舰船
-        for (const [teamId, ships] of Object.entries(payload.ships)) {
-          const rep = payload.players.find((p:any) => p.teamId === teamId)
-          shipStore.finalizeDesign(rep?.name ?? '', teamId, ships as any)
-        }
-        // 加载玩家和队伍(如果尚未设置)
-        if (gameStore.players.length === 0) {
-          gameStore.initTeams(payload.teams.map((t:any) => ({ name: t.id, color: t.color })))
-          gameStore.initPlayers(payload.players.map((p:any) => ({ name: p.name, teamId: p.teamId })))
-        }
-        // 找到自己的槽位
-        mySlotIndex.value = payload.players.findIndex((p:any) => p.name === multiplayerClient.id || true)
-        if (mySlotIndex.value < 0) mySlotIndex.value = 0
-        // 发初始手牌(如果服务端没有提供)
-        if (Object.keys(payload.playerHands).length === 0) {
-          cardStore.dealInitialHands(gameStore.players.map((p:any) => p.id))
-        }
-        combatStore.log('战斗开始! 请选择出生点', 'system')
-        // 多人出生: 只为自己
-        const myPlayer = gameStore.players[mySlotIndex.value]
-        if (myPlayer && !myPlayer.currentShipId) {
-          const myShips = shipStore.ships.filter((s:any) => s.ownerTeamId === myPlayer.teamId)
-          if (myShips.length > 0) {
-            spawnPlayerName.value = myPlayer.name
-            showSpawnDialog.value = true
-          }
-        }
-      })
-      // 如果 battle:init 已发送(设计阶段已收到), 直接触发
-      multiplayerClient.onBattleTurn((t) => { currentTurnSlot.value = t.playerSlotIndex })
-      multiplayerClient.onBattleAction((a) => { /* 远程操作本地执行 */ })
+      multiplayerClient.requestBattleInit()
       return
     }
     startSpawnPhase()

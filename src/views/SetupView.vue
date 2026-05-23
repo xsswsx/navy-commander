@@ -9,6 +9,9 @@ import { useUiStore } from '@/stores/ui'
 import { TEAM_COLORS } from '@/game/constants'
 import type { GameMode } from '@/game/types'
 import { ElMessage } from 'element-plus'
+import MultiplayerLobby from '@/components/setup/MultiplayerLobby.vue'
+import type { RoomState } from '@shared/protocol'
+import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
 const router = useRouter()
 const gameStore = useGameStore()
@@ -32,8 +35,8 @@ const totalCompartments = ref(10)
 
 const modeOptions = [
   { value: 'hotseat', label: '热座模式', desc: '本地多人轮流操作，适合2-12人同机游玩' },
+  { value: 'multiplayer', label: '多人模式', desc: '在线联机对战，与好友远程游玩' },
   { value: 'single', label: '单机模式', desc: '与AI对战（开发中）', disabled: true },
-  { value: 'multiplayer', label: '多人模式', desc: '在线联机对战（开发中）', disabled: true },
 ]
 
 function initTeams(): void {
@@ -65,8 +68,24 @@ function removePlayer(teamIndex: number, playerIndex: number): void {
 
 function selectMode(mode: GameMode): void {
   selectedMode.value = mode
-  step.value = 1
-  initTeams()
+  if (mode === 'multiplayer') { step.value = 3 }
+  else { step.value = 1; initTeams() }
+}
+
+function onMultiplayerStartDesign(room: RoomState): void {
+  gameStore.setMode('multiplayer')
+  gameStore.setTotalCompartments(room.totalCompartments)
+  const uniqueTeams = [...new Set(room.slots.map(s => s.teamId))]
+  gameStore.initTeams(uniqueTeams.map((name, i) => ({ name, color: TEAM_COLORS[i % TEAM_COLORS.length] })))
+  const playerConfigs = room.slots.filter(s => s.playerName).map(s => ({ name: s.playerName!, teamId: s.teamId }))
+  gameStore.initPlayers(playerConfigs)
+  shipStore.resetShipStore()
+  combatStore.resetCombatStore()
+  uiStore.resetUiStore()
+  cardStore.resetCardStore()
+  cardStore.initDeck()
+  gameStore.startDesignPhase()
+  router.push('/design')
 }
 
 function goToStep2(): void {
@@ -210,6 +229,10 @@ function startDesign(): void {
         <el-button @click="step = 1">上一步</el-button>
         <el-button type="primary" size="large" @click="startDesign">开始设计舰船</el-button>
       </div>
+    </div>
+
+    <div v-if="step === 3" class="setup-card">
+      <MultiplayerLobby @start-design="onMultiplayerStartDesign" @back="step = 0" />
     </div>
   </div>
 </template>

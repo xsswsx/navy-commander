@@ -42,7 +42,14 @@ const spawnPlayerName = ref('')
 const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
-const spawnIndex = ref(0) // 出生点选择阶段: 当前正在选出生的玩家在turnOrder中的索引
+const spawnIndex = ref(0)
+const myTeamId = computed(() => {
+  if (isMP.value) {
+    const p = gameStore.players[mySlotIndex.value]
+    return p?.teamId ?? ''
+  }
+  return gameStore.currentPlayer?.teamId ?? ''
+}) // 出生点选择阶段: 当前正在选出生的玩家在turnOrder中的索引
 
 // ===== 战斗开始: 全玩家选择出生点 → 第一回合 =====
 
@@ -977,7 +984,7 @@ watch(() => gameStore.phase, p => { if (p === 'results') router.push('/results')
     <!-- 出生点 -->
     <el-dialog v-model="showSpawnDialog" :title="`${spawnPlayerName} — 选择出生点`" width="500px" :close-on-click-modal="false" :show-close="false">
       <div class="spawn-grid">
-        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === (gameStore.players.find(p => p.id === gameStore.turnOrder[spawnIndex])?.teamId ?? ''))" :key="ship.id" class="spawn-ship">
+        <div v-for="ship in shipStore.ships.filter(s => s.ownerTeamId === myTeamId)" :key="ship.id" class="spawn-ship">
           <h4>{{ ship.name }}</h4>
           <div class="spawn-comps">
             <div v-for="comp in ship.compartments" :key="comp.id" class="spawn-comp"

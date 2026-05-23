@@ -26,7 +26,13 @@ const resourceEquipment = getEquipmentByCategory('resource')
 // 阵营级设计: 每个阵营轮流设计
 const designTeamIndex = ref(0)
 const designerTeams = computed(() => gameStore.teams.map(t => t.id))
-const currentTeamId = computed(() => designerTeams.value[designTeamIndex.value] ?? null)
+const currentTeamId = computed(() => {
+  if (isMultiplayer.value) {
+    const mySlot = mpSlots.value.find((s: any) => s.socketId === multiplayerClient.id)
+    return mySlot?.teamId ?? designerTeams.value[0] ?? null
+  }
+  return designerTeams.value[designTeamIndex.value] ?? null
+})
 const currentTeam = computed(() =>
   gameStore.teams.find(t => t.id === currentTeamId.value) ?? null
 )

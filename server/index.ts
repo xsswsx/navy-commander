@@ -131,20 +131,26 @@ io.on('connection', (socket) => {
   })
 
   // ===================== 战斗阶段 =====================
+
+  /** 获取有玩家的槽位索引数组 (按 slot.index 排序) */
+  function occupiedSlots(room: ReturnType<typeof getRoom>): number[] {
+    if (!room) return []
+    return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
+  }
+
   socket.on('battle:spawn', ({ compartmentId }) => {
     const slot = getMySlot(socket.id)
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
     room.spawns.set(slot.slotIndex, { shipId: '', compIndex: 0 })
-    // 广播出生事件
     io.to(slot.code).emit('battle:action', { type: 'selectSpawn', compartmentId, senderSlotIndex: slot.slotIndex })
     io.to(slot.code).emit('battle:log', { message: `槽位${slot.slotIndex + 1} 选择出生点`, type: 'system', timestamp: Date.now() })
-    // 如果所有槽位都出生完毕, 广播第一位玩家的回合
-    const allSpawned = room.state.slots.every(s => !s.playerName || room.spawns.has(s.index))
-    if (allSpawned) {
-      room.currentTurnSlot = 0
-      io.to(slot.code).emit('battle:turn', { playerSlotIndex: 0 })
+    const occ = occupiedSlots(room)
+    const allSpawned = occ.every(idx => room.spawns.has(idx))
+    if (allSpawned && occ.length > 0) {
+      room.currentTurnSlot = occ[0]
+      io.to(slot.code).emit('battle:turn', { playerSlotIndex: occ[0] })
     }
   })
 
@@ -154,8 +160,10 @@ io.on('connection', (socket) => {
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
     if (room.currentTurnSlot !== slot.slotIndex) return
-    // 推进回合
-    room.currentTurnSlot = (room.currentTurnSlot + 1) % room.state.slots.length
+    const occ = occupiedSlots(room)
+    const curIdx = occ.indexOf(room.currentTurnSlot)
+    if (curIdx < 0) return
+    room.currentTurnSlot = occ[(curIdx + 1) % occ.length]
     io.to(slot.code).emit('battle:turn', { playerSlotIndex: room.currentTurnSlot })
     console.log(`[battle:turn] ${slot.code} → slot ${room.currentTurnSlot}`)
   })
@@ -165,8 +173,9 @@ io.on('connection', (socket) => {
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
+    // 校验: 只有当前回合槽位可以发送行动
+    if (action.type !== 'selectSpawn' && room.currentTurnSlot !== slot.slotIndex) return
     action.senderSlotIndex = slot.slotIndex
-    // 广播给全房间
     io.to(slot.code).emit('battle:action', action)
   })
 

@@ -2,7 +2,7 @@ import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { generateRoomCode } from '../shared/protocol.js'
 import type { RoomConfig, ShipDesignData, BattleAction } from '../shared/protocol.js'
-import { newRoom, getRoom, getRoomBySocket, deleteRoom } from './state.js'
+import { newRoom, getRoom, getRoomBySocket, setSocketRoom, removeSocketRoom } from './state.js'
 
 const httpServer = createServer()
 const io = new Server(httpServer, { cors: { origin: '*' } })
@@ -32,6 +32,7 @@ io.on('connection', (socket) => {
       teamCount: config.teams.length, totalCompartments: config.totalCompartments,
     })
     socket.join(code)
+    setSocketRoom(socket.id, code)
     io.to(code).emit('room:state', room.state)
     console.log(`[room:create] ${code} by ${config.hostName} (${slots.length} slots)`)
   })
@@ -40,6 +41,7 @@ io.on('connection', (socket) => {
     const room = getRoom(roomCode)
     if (!room) { socket.emit('error', { message: '房间不存在' }); return }
     socket.join(roomCode)
+    setSocketRoom(socket.id, roomCode)
     io.to(roomCode).emit('room:state', room.state)
     console.log(`[room:join] ${roomCode} joined by ${playerName}`)
   })
@@ -199,6 +201,7 @@ io.on('connection', (socket) => {
       }
       socketSlotMap.delete(socket.id)
     }
+    removeSocketRoom(socket.id)
     console.log(`[disconnect] ${socket.id}`)
   })
 })

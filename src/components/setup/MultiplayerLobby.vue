@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, watch } from 'vue'
 import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 import type { RoomState } from '@shared/protocol'
 import { TEAM_COLORS } from '@/game/constants'
@@ -26,6 +26,13 @@ function initTeams(): void {
   }
 }
 initTeams()
+
+// 监听房间阶段变化 — 所有客户端收到 phase='design' 时自动进入设计
+watch(() => room.value?.phase, (phase) => {
+  if (phase === 'design' && room.value) {
+    emit('start-design', room.value)
+  }
+})
 
 function addSlot(ti: number): void {
   if (!slotNames[ti]) slotNames[ti] = []

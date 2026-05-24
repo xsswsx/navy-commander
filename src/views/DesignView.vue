@@ -59,10 +59,13 @@ const remainingCompartments = computed(() => teamCompartmentBudget.value - usedC
 const selectedEquipment = ref<EquipmentType | null>(null)
 
 // ===== 多人模式 =====
+let syncingFromRemote = false
+
 onMounted(() => {
   if (!isMultiplayer.value) return
   multiplayerClient.onRoomState((r) => { mpSlots.value = r.slots || [] })
   multiplayerClient.onDesignState((d) => {
+    syncingFromRemote = true
     ships.value = d.ships.map((s: any) => ({
       name: s.name,
       compartments: s.compartments.map((c: any) => ({
@@ -73,11 +76,12 @@ onMounted(() => {
       })),
     }))
     for (let i = 0; i < ships.value.length; i++) rebuildMultiComp(i)
+    syncingFromRemote = false
   })
 })
 
 function mpSync(): void {
-  if (!isMultiplayer.value || isReady.value) return
+  if (!isMultiplayer.value || isReady.value || syncingFromRemote) return
   multiplayerClient.sendDesignUpdate(ships.value.map(s => ({
     name: s.name,
     compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
@@ -89,7 +93,9 @@ watch(ships, () => { mpSync() }, { deep: true })
 function mpReady(): void {
   if (!validateDesign()) { ElMessage.warning('设计不符合要求'); return }
   if (!currentTeam.value) return
-  confirmDesign()
+  // 仅当本阵营没有船时才 finalize (避免重复创建)
+  const existing = shipStore.ships.filter(s => s.ownerTeamId === currentTeam.value!.id)
+  if (existing.length === 0) confirmDesign()
   multiplayerClient.setReady()
   isReady.value = true
 }

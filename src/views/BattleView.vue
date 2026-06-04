@@ -30,6 +30,12 @@ const isMP = computed(() => gameStore.mode === 'multiplayer')
 const mySlotIndex = ref(-1)
 const currentTurnSlot = ref(-1)
 const mpRoundNumber = ref(1)
+const mpSpawnOrder = ref<number[]>([])
+const mpSpawnIdx = ref(0)
+const isMyTurnToSpawn = computed(() => {
+  if (!isMP.value || mpSpawnOrder.value.length === 0) return false
+  return mpSpawnOrder.value[mpSpawnIdx.value] === mySlotIndex.value
+})
 
 // 多人模式权限
 function mpCanAct(): boolean {
@@ -172,11 +178,15 @@ if (isMP.value) {
       }
     }
 
+    // 出生顺序
+    mpSpawnOrder.value = payload.spawnOrder || payload.turnOrder || []
+    mpSpawnIdx.value = 0
+
     combatStore.log('战斗开始! 请选择出生点', 'system')
 
     // 检查是否已选择出生点
     const alreadySpawned = payload.spawns?.find((s: any) => s.slotIndex === mySlotIndex.value)
-    if (!alreadySpawned) {
+    if (!alreadySpawned && isMyTurnToSpawn.value) {
       const myP = getPlayerBySlot(mySlotIndex.value)
       if (myP && !myP.currentShipId) {
         spawnPlayerName.value = myP.name
@@ -200,12 +210,12 @@ if (isMP.value) {
     if (player) {
       combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
     }
-    // 如果是自己的回合，触发抽牌阶段
+    // 如果是自己的回合，直接进入抽牌阶段 (不依赖 phase watcher)
     if (t.playerSlotIndex === mySlotIndex.value) {
-      // startBattlePhase() 预置了 phase='draw', 直接赋相同值不会触发 watch
-      // 需要先切到其他 phase 再切回来, 确保 startDrawPhase 一定被调用
-      gameStore.currentTurnPhase = 'discard'
-      gameStore.currentTurnPhase = 'draw'
+      combatStore.resetPerTurnCounters()
+      uiStore.resetBattleState()
+      if (pid) combatStore.removeFightersByPlayer(pid)
+      startDrawPhase()
     }
   }))
 
@@ -344,6 +354,16 @@ function handleRemoteAction(action: BattleAction): void {
           senderPlayer.currentShipId = ship.id
           senderPlayer.currentCompartmentIndex = comp.position
           combatStore.log(`${senderPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
+        }
+      }
+      // 推进出生顺序
+      mpSpawnIdx.value++
+      // 如果轮到我了 → 显示出生对话框
+      if (isMyTurnToSpawn.value) {
+        const myP = getPlayerBySlot(mySlotIndex.value)
+        if (myP && !myP.currentShipId) {
+          spawnPlayerName.value = myP.name
+          showSpawnDialog.value = true
         }
       }
       break

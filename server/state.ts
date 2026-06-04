@@ -10,6 +10,8 @@ export interface ServerRoom {
   designs: Map<string, DesignState>    // teamId → DesignState
   readyTeams: Set<string>              // 已准备的队伍ID
   spawns: Map<number, { shipId: string; compIndex: number }> // slotIndex → spawn
+  spawnOrder: number[]                 // 出生顺序
+  spawnIndex: number                   // 当前轮到谁选出生
   currentTurnSlot: number
   roundNumber: number
   lastBattleInit: any                  // 缓存最近一次 battle:init payload

@@ -211,6 +211,29 @@ io.on('connection', (socket) => {
     return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
   }
 
+  /** 构建出生顺序 (与回合顺序一致) */
+  function buildSpawnOrder(room: ReturnType<typeof getRoom>): number[] {
+    if (!room) return []
+    const occ = occupiedSlots(room)
+    const order: number[] = []
+    const teamIds = [...new Set(room.state.slots.map(s => s.teamId))]
+    const teamQueues: Record<string, number[]> = {}
+    for (const idx of occ) {
+      const t = room.state.slots[idx].teamId
+      if (!teamQueues[t]) teamQueues[t] = []
+      teamQueues[t].push(idx)
+    }
+    let added = true
+    while (added) {
+      added = false
+      for (const tid of teamIds) {
+        const q = teamQueues[tid]
+        if (q && q.length > 0) { order.push(q.shift()!); added = true }
+      }
+    }
+    return order
+  }
+
   socket.on('battle:request', () => {
     const slot = getMySlot(socket.id)
     if (!slot) return
@@ -229,12 +252,22 @@ io.on('connection', (socket) => {
     })
   })
 
+  // 出生阶段
   socket.on('battle:spawn', ({ compartmentId, shipId }) => {
     const slot = getMySlot(socket.id)
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
+    // 按顺序选择出生点
+    const currentSpawnSlot = room.spawnOrder[room.spawnIndex]
+    if (currentSpawnSlot !== undefined && slot.slotIndex !== currentSpawnSlot) {
+      socket.emit('error', { message: '还没轮到你选出生点' })
+      return
+    }
+    // 防止重复选择
+    if (room.spawns.has(slot.slotIndex)) return
     room.spawns.set(slot.slotIndex, { shipId: shipId || '', compIndex: 0 })
+    room.spawnIndex++
     const logMsg = `${room.state.slots[slot.slotIndex]?.playerName || '?'} 选择出生点`
     room.battleLog.push({ message: logMsg, type: 'system', timestamp: Date.now() })
     io.to(slot.code).emit('battle:action', {
@@ -243,12 +276,14 @@ io.on('connection', (socket) => {
       logMessage: logMsg, logType: 'system',
     })
     io.to(slot.code).emit('battle:log', { message: logMsg, type: 'system', timestamp: Date.now() })
-    // 检查所有玩家是否都选择了出生点
+    // 检查所有人是否都已选择
     const occ = occupiedSlots(room)
     const allSpawned = occ.every(idx => room.spawns.has(idx))
-    if (allSpawned && occ.length > 0) {
+    if (allSpawned) {
       room.currentTurnSlot = occ[0]
-      io.to(slot.code).emit('battle:turn', { playerSlotIndex: occ[0], roundNumber: room.roundNumber })
+      const payload = { playerSlotIndex: occ[0], roundNumber: room.roundNumber }
+      console.log(`[battle:spawn] all spawned → turn slot ${occ[0]}`)
+      io.to(slot.code).emit('battle:turn', payload)
     }
   })
 
@@ -426,6 +461,11 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
   room.state.phase = 'battle'
   room.state.readyTeams = [...room.readyTeams]
 
+  // 初始化出生顺序 (必须在构建 payload 之前)
+  room.spawns = new Map()
+  room.spawnIndex = 0
+  room.spawnOrder = buildSpawnOrder(room)
+
   // 构建队伍信息
   const teamIds = [...new Set(room.state.slots.map(s => s.teamId))]
   const players = room.state.slots.filter(s => s.playerName).map(s => ({
@@ -473,6 +513,7 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     if (ds.ships.length > 0) ships[teamId] = ds.ships
   }
 
+  const spawnOrder = room.spawnOrder
   const initPayload = {
     ships,
     players,
@@ -485,6 +526,7 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     playerHands,
     drawPile,
     discardPile,
+    spawnOrder,
   }
 
   // 保存牌堆状态到 room
@@ -493,10 +535,11 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
   for (const [si, hand] of Object.entries(playerHands)) {
     room.playerHands.set(Number(si), hand)
   }
+  room.currentTurnSlot = 0
   room.lastBattleInit = initPayload
   room.roundNumber = 1
 
-  console.log(`[checkAllReady] EMITTING battle:init to room ${code} — ${players.length} players, ${turnOrder.length} slots`)
+  console.log(`[checkAllReady] EMITTING battle:init to room ${code} — ${players.length} players, ${turnOrder.length} slots, spawnOrder=[${room.spawnOrder}]`)
   io.to(code).emit('battle:init', initPayload)
   io.to(code).emit('room:state', room.state)
   console.log(`[checkAllReady] battle:init EMITTED for room ${code}`)

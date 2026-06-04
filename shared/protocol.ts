@@ -69,6 +69,7 @@ export interface BattleInitPayload {
   playerHands: Record<number, CardData[]> // slotIndex → Card[]
   drawPile: CardData[]              // 服务器洗好的抽牌堆
   discardPile: CardData[]           // 弃牌堆
+  spawnOrder: number[]              // 出生顺序 (slotIndex 排列)
 }
 
 // ==================== 工具 ====================

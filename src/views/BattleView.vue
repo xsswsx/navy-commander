@@ -58,6 +58,7 @@ let replayingRemote = false
 // slotIndex → player.id 映射 (因 players 数组可能不连续)
 const slotToPlayerId = ref<Record<number, string>>({})
 const playerIdToSlot = ref<Record<string, number>>({})
+const mpCleanups: (() => void)[] = []
 
 function getPlayerBySlot(slotIndex: number) {
   const pid = slotToPlayerId.value[slotIndex]
@@ -66,7 +67,7 @@ function getPlayerBySlot(slotIndex: number) {
 
 // ===== 多人模式: 注册事件监听 (在组件 setup 阶段) =====
 if (isMP.value) {
-  multiplayerClient.onBattleInit((payload: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => {
+  mpCleanups.push(multiplayerClient.onBattleInit((payload: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => {
     // 如果已经初始化过 (可能由 DesignView 预先初始化)，跳过
     if (gameStore.players.length > 0 && shipStore.ships.length > 0) {
       // 只更新回合/出生点状态
@@ -153,9 +154,9 @@ if (isMP.value) {
         showSpawnDialog.value = true
       }
     }
-  })
+  }))
 
-  multiplayerClient.onBattleTurn((t) => {
+  mpCleanups.push(multiplayerClient.onBattleTurn((t) => {
     currentTurnSlot.value = t.playerSlotIndex
     if (t.roundNumber) mpRoundNumber.value = t.roundNumber
     // 对齐 gameStore 的回合索引
@@ -174,26 +175,26 @@ if (isMP.value) {
     if (t.playerSlotIndex === mySlotIndex.value) {
       gameStore.currentTurnPhase = 'draw'
     }
-  })
+  }))
 
-  multiplayerClient.onBattleAction((action: BattleAction) => {
+  mpCleanups.push(multiplayerClient.onBattleAction((action: BattleAction) => {
     // 忽略自己的操作 (本地已执行)
     if (action.senderSlotIndex === mySlotIndex.value) return
     replayingRemote = true
     handleRemoteAction(action)
     replayingRemote = false
-  })
+  }))
 
-  multiplayerClient.onBattleLog((entry) => {
+  mpCleanups.push(multiplayerClient.onBattleLog((entry) => {
     combatStore.log(entry.message, entry.type as any)
-  })
+  }))
 
-  multiplayerClient.onCardDrawn((d) => {
+  mpCleanups.push(multiplayerClient.onCardDrawn((d) => {
     const pid = slotToPlayerId.value[mySlotIndex.value]
     if (pid) {
       cardStore.playerHands[pid] = d.hand as any
     }
-  })
+  }))
 }
 
 // ===== 战斗开始 =====
@@ -211,9 +212,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (isMP.value) {
-    multiplayerClient.removeAllListeners()
-  }
+  mpCleanups.forEach(fn => fn())
 })
 
 function startSpawnPhase(): void {

@@ -7,6 +7,7 @@ import { ElMessage } from 'element-plus'
 
 const emit = defineEmits<{ 'start-design': [room: RoomState]; 'start-battle': [room: RoomState]; 'back': [] }>()
 
+const lobbyCleanups: (() => void)[] = []
 const room = ref<RoomState | null>(null)
 const playerId = ref(localStorage.getItem('mp_playerId') || '')
 const roomCodeInput = ref('')
@@ -47,8 +48,8 @@ function removeSlot(ti: number, si: number): void { slotNames[ti].splice(si, 1) 
 function initConnection(): void {
   // connect() 是幂等的 (已连接则跳过)，不会丢失现有 listener
   multiplayerClient.connect()
-  multiplayerClient.onRoomState((r) => { room.value = r })
-  multiplayerClient.onError((e) => ElMessage.error(e.message))
+  lobbyCleanups.push(multiplayerClient.onRoomState((r) => { room.value = r }))
+  lobbyCleanups.push(multiplayerClient.onError((e) => ElMessage.error(e.message)))
 }
 
 function createRoom(): void {
@@ -90,7 +91,7 @@ function isMySlot(slot: any): boolean { return slot.socketId === multiplayerClie
 initConnection()
 
 onUnmounted(() => {
-  multiplayerClient.removeAllListeners()
+  lobbyCleanups.forEach(fn => fn())
 })
 </script>
 

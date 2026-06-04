@@ -40,28 +40,25 @@ export class MultiplayerClient {
   requestDesignState(): void { this.socket?.emit('design:requestState') }
 
   // ===== 监听 =====
-  private on(event: string, cb: Cb): void {
+  /** 注册监听器，返回卸载函数 (组件卸载时调用以清理自身监听器) */
+  private on(event: string, cb: Cb): () => void {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set())
     this.listeners.get(event)!.add(cb)
     this.socket?.on(event, cb)
-  }
-
-  /** 移除所有已注册的 socket 监听器 (用于组件卸载时清理) */
-  removeAllListeners(): void {
-    for (const [event, cbs] of this.listeners) {
-      for (const cb of cbs) this.socket?.off(event, cb)
+    return () => {
+      this.listeners.get(event)?.delete(cb)
+      this.socket?.off(event, cb)
     }
-    this.listeners.clear()
   }
 
-  onRoomState(cb: (s: RoomState) => void): void { this.on('room:state', cb) }
-  onDesignState(cb: (d: { teamId: string; ships: ShipDesignData[]; readySlots: number[]; isTeamReady?: boolean }) => void): void { this.on('design:state', cb) }
-  onBattleInit(cb: (p: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => void): void { this.on('battle:init', cb) }
-  onBattleAction(cb: (a: BattleAction) => void): void { this.on('battle:action', cb) }
-  onBattleTurn(cb: (t: { playerSlotIndex: number; roundNumber?: number }) => void): void { this.on('battle:turn', cb) }
-  onBattleLog(cb: (e: { message: string; type: string; timestamp: number }) => void): void { this.on('battle:log', cb) }
-  onCardDrawn(cb: (d: { cards: CardData[]; hand: CardData[] }) => void): void { this.on('card:drawn', cb) }
-  onError(cb: (e: { message: string }) => void): void { this.on('error', cb) }
+  onRoomState(cb: (s: RoomState) => void): () => void { return this.on('room:state', cb) }
+  onDesignState(cb: (d: { teamId: string; ships: ShipDesignData[]; readySlots: number[]; isTeamReady?: boolean }) => void): () => void { return this.on('design:state', cb) }
+  onBattleInit(cb: (p: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => void): () => void { return this.on('battle:init', cb) }
+  onBattleAction(cb: (a: BattleAction) => void): () => void { return this.on('battle:action', cb) }
+  onBattleTurn(cb: (t: { playerSlotIndex: number; roundNumber?: number }) => void): () => void { return this.on('battle:turn', cb) }
+  onBattleLog(cb: (e: { message: string; type: string; timestamp: number }) => void): () => void { return this.on('battle:log', cb) }
+  onCardDrawn(cb: (d: { cards: CardData[]; hand: CardData[] }) => void): () => void { return this.on('card:drawn', cb) }
+  onError(cb: (e: { message: string }) => void): () => void { return this.on('error', cb) }
 }
 
 export const multiplayerClient = new MultiplayerClient()

@@ -67,18 +67,18 @@ const selectedEquipment = ref<EquipmentType | null>(null)
 let syncingFromRemote = false
 let lastSentDesignJson = ''
 let battleInitReceived = false
+const mpCleanups: (() => void)[] = []
 
 onMounted(() => {
   if (!isMultiplayer.value) return
-  multiplayerClient.onRoomState((r) => {
+  mpCleanups.push(multiplayerClient.onRoomState((r) => {
     mpSlots.value = r.slots || []
     mpReadyTeams.value = r.readyTeams || []
     if (r.phase === 'battle' && !battleInitReceived) {
-      // 兜底: battle:init 没有到达，主动请求
       multiplayerClient.requestBattleInit()
     }
-  })
-  multiplayerClient.onDesignState((d) => {
+  }))
+  mpCleanups.push(multiplayerClient.onDesignState((d) => {
     syncingFromRemote = true
     ships.value = d.ships.map((s: any) => ({
       name: s.name,
@@ -91,27 +91,23 @@ onMounted(() => {
     }))
     for (let i = 0; i < ships.value.length; i++) rebuildMultiComp(i)
     isTeamReady.value = d.isTeamReady || false
-    // 更新 lastSentDesignJson 防止回环
     lastSentDesignJson = JSON.stringify(ships.value.map(s => ({
       name: s.name,
       compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
     })))
     syncingFromRemote = false
-  })
-  // 监听 battle:init — 服务器通知所有玩家进入战斗
-  multiplayerClient.onBattleInit((payload) => {
+  }))
+  mpCleanups.push(multiplayerClient.onBattleInit((payload) => {
     if (battleInitReceived) return
     battleInitReceived = true
     loadBattleAndGo(payload)
-  })
+  }))
   // 请求当前设计状态 (解决挂载后无初始数据问题)
   multiplayerClient.requestDesignState()
 })
 
 onUnmounted(() => {
-  if (isMultiplayer.value) {
-    multiplayerClient.removeAllListeners()
-  }
+  mpCleanups.forEach(fn => fn())
 })
 
 function loadBattleAndGo(payload: any): void {

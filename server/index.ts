@@ -14,8 +14,6 @@ function getMySlot(socketId: string): { code: string; slotIndex: number } | null
   return socketSlotMap.get(socketId) ?? null
 }
 
-const INITIAL_HAND_SIZE = 7
-
 io.on('connection', (socket) => {
   console.log(`[connect] ${socket.id}`)
 
@@ -493,18 +491,14 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     }
   }
 
-  // 构建服务端牌堆
+  // 构建服务端牌堆 (不发初始手牌, 由各玩家回合开始时的 startDrawPhase 负责)
   const deck = shuffleCards(buildDeckCards())
   const playerHands: Record<number, CardData[]> = {}
 
-  // 发初始手牌
   let drawPile = [...deck]
   let discardPile: CardData[] = []
   for (const p of players) {
-    const { drawn, newDraw, newDiscard } = drawFromDeck(drawPile, discardPile, INITIAL_HAND_SIZE)
-    drawPile = newDraw
-    discardPile = newDiscard
-    playerHands[p.slotIndex] = drawn
+    playerHands[p.slotIndex] = []
   }
 
   // 收集所有阵营的设计

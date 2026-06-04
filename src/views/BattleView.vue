@@ -61,6 +61,19 @@ const myTeamId = computed(() => {
 
 // 防御: 防止远程操作触发本地操作再发送回服务器
 let replayingRemote = false
+/** 当前操作积累的战斗结果 (操作完成后一次性发送) */
+let pendingResults: import('@shared/protocol').CombatActionResult[] = []
+function flushPendingResults(logMsg?: string, logType?: string): void {
+  if (pendingResults.length === 0) return
+  multiplayerClient.sendAction({
+    type: 'playCard',
+    senderSlotIndex: mySlotIndex.value,
+    results: [...pendingResults],
+    logMessage: logMsg,
+    logType: logType,
+  })
+  pendingResults = []
+}
 // slotIndex → player.id 映射 (因 players 数组可能不连续)
 const slotToPlayerId = ref<Record<number, string>>({})
 const playerIdToSlot = ref<Record<string, number>>({})
@@ -375,7 +388,82 @@ function handleRemoteAction(action: BattleAction): void {
       combatStore.resetPerTurnCounters()
       break
     }
-    // 其他操作类型由各自的 handler 经过服务器 relay 后处理
+    case 'playCard':
+    default: {
+      // 重放战斗结果 (playCard 携带 results 用于跨客户端同步)
+      if (action.logMessage) {
+        combatStore.log(action.logMessage, (action.logType || 'info') as any)
+      }
+      replayResults(action.results || [], senderPlayer)
+      // 重放完成后检查舰船沉没/队伍覆灭
+      for (const dmg of (action.results || []).filter(r => r.op === 'damage').flatMap(r => r.damages || [])) {
+        if (dmg.destroyed) {
+          const ship = shipStore.getShipByCompartment(dmg.compartmentId)
+          if (ship && shipStore.isShipSunk(ship.id)) {
+            combatStore.log(`${ship.name} 战沉!`, 'destroy')
+            for (const p of gameStore.players) {
+              if (p.currentShipId === ship.id) gameStore.eliminatePlayer(p.id)
+            }
+            if (shipStore.isTeamDefeated(ship.ownerTeamId)) {
+              combatStore.log(`队伍 ${ship.ownerTeamId} 全军覆没!`, 'destroy')
+            }
+          }
+          gameStore.checkWinCondition()
+        }
+      }
+      break
+    }
+  }
+}
+
+/** 远程重放战斗结果 */
+function replayResults(results: import('@shared/protocol').CombatActionResult[], senderPlayer: any): void {
+  for (const r of results) {
+    switch (r.op) {
+      case 'damage': {
+        for (const d of r.damages || []) {
+          shipStore.applyDamage(d.compartmentId, d.damage)
+          combatStore.log(`${r.source || '?'} → ${d.compartmentId} ${d.damage}伤害${d.destroyed ? ' — 击毁!' : ''}`, d.destroyed ? 'destroy' : 'damage')
+          // 注意: 发送方已在 results 中包含了链式反应伤害 (弹药库殉爆等),
+          // 所以不在重放端再次触发 handleCompDestroyed, 避免重复伤害
+        }
+        break
+      }
+      case 'addTorpedo': {
+        if (r.torpSourceCompId && r.torpTargetCompId) {
+          combatStore.addTorpedoSalvo(r.torpSourceCompId, r.torpTargetCompId, r.torpCount || 0, r.torpTurns || 0)
+          combatStore.log(`鱼雷发射! ${r.torpCount}颗 → ${r.torpTargetCompId}`, 'system')
+        }
+        break
+      }
+      case 'addFighter': {
+        if (r.fighterShipId && r.fighterTeamId) {
+          combatStore.addFighterToken(r.fighterShipId, r.fighterTeamId, r.fighterCompId || '', senderPlayer.id, r.fighterTurns || 0)
+          combatStore.log(`战斗机起飞 → ${shipStore.findShip(r.fighterShipId)?.name ?? r.fighterShipId}, 空优+2`, 'effect')
+        }
+        break
+      }
+      case 'addEffect': {
+        if (r.effectType && r.effectSourceCompId) {
+          combatStore.addEffect(r.effectType as any, r.effectSourceCompId, r.effectAffectedCompIds || [], r.effectTurns || 0)
+          combatStore.log(`烟幕 (${r.effectType === 'smoke_short' ? '半' : '全'}回合): ${r.effectTurns}回合`, 'effect')
+        }
+        break
+      }
+      case 'compHeal': {
+        if (r.healCompId) {
+          shipStore.healCompartment(r.healCompId, r.healAmount || 0)
+          combatStore.log(`维修 HP+${r.healAmount}`, 'effect')
+        }
+        break
+      }
+      case 'move': {
+        if (r.toCompIdx != null) {
+          senderPlayer.currentCompartmentIndex = r.toCompIdx
+        }
+        break
+      }
+    }
   }
 }
 
@@ -400,14 +488,14 @@ watch(() => gameStore.currentTurnPhase, (phase) => {
 // ===== 抽牌 =====
 function startDrawPhase(): void {
   if (isMP.value) {
-    // 多人模式: 从服务器抽牌 (批量)
     const playerId = gameStore.currentPlayerId!
     const player = gameStore.currentPlayer
     if (!player || !player.currentShipId) return
     const ship = shipStore.findShip(player.currentShipId)
     if (!ship) return
     const comp = player.currentCompartmentIndex != null ? ship.compartments[player.currentCompartmentIndex] : null
-    let drawAmount = comp ? shipStore.getDrawValue(comp) : 1
+    // 基础抽牌 2 + 舱段抽牌值 + 第一轮补偿
+    let drawAmount = 2 + (comp ? shipStore.getDrawValue(comp) : 0)
     const compensation = gameStore.getFirstRoundCompensation(playerId)
     if (compensation > 0) {
       drawAmount += compensation
@@ -428,7 +516,7 @@ function startDrawPhase(): void {
   const ship = shipStore.findShip(player.currentShipId)
   if (!ship) return
   const comp = player.currentCompartmentIndex != null ? ship.compartments[player.currentCompartmentIndex] : null
-  let drawAmount = comp ? shipStore.getDrawValue(comp) : 1
+  let drawAmount = 2 + (comp ? shipStore.getDrawValue(comp) : 0)
   const compensation = gameStore.getFirstRoundCompensation(playerId)
   if (compensation > 0) { drawAmount += compensation; combatStore.log(`${player.name} 第一轮后攻补偿 +${compensation}张`, 'system') }
   cardStore.playerDrawCards(playerId, drawAmount)
@@ -610,7 +698,10 @@ function resolveMove(compartmentId: string): void {
 
   if (uiStore.selectedCardIds.length > 0) {
     cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
-    if (isMP.value) multiplayerClient.discardCards(uiStore.selectedCardIds)
+    if (isMP.value) {
+    multiplayerClient.discardCards(uiStore.selectedCardIds)
+    pendingResults.push({ op: 'move', toCompIdx: targetComp.position })
+  }
   }
   if (uiStore.isFreeAction) gameStore.useFreeAction()
 
@@ -921,6 +1012,7 @@ function executeTargetedCommand(
         combatStore.addTorpedoSalvo(comp.id, targetId, 4, fullRound)
         combatStore.setTorpedoLoaded(comp.id, false)
         combatStore.log(`鱼雷发射! 4颗, ${fullRound}全回合后到达`, 'system')
+        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addTorpedo', torpSourceCompId: comp.id, torpTargetCompId: targetId, torpCount: 4, torpTurns: fullRound })
         ElMessage.success('4颗鱼雷发射!')
       }
       break
@@ -931,6 +1023,7 @@ function executeTargetedCommand(
       const tgtShipId = targetId
       if (cmdId.includes('fighter')) {
         combatStore.addFighterToken(tgtShipId, player.teamId, comp.id, playerId, gameStore.alivePlayerCount)
+        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addFighter', fighterShipId: tgtShipId, fighterTeamId: player.teamId, fighterCompId: comp.id, fighterTurns: gameStore.alivePlayerCount })
         combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2`, 'effect')
       } else if (cmdId.includes('bomber')) {
         const nfa = getFullAirSuperiority(tgtShipId, player.teamId)
@@ -954,6 +1047,7 @@ function executeTargetedCommand(
       const isShort = cmdId === 'smoke_short'
       const turns = isShort ? Math.ceil(gameStore.alivePlayerCount / 2) : gameStore.alivePlayerCount
       combatStore.addEffect(isShort ? 'smoke_short' : 'smoke_long', comp.id, affected, turns)
+      if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addEffect', effectType: isShort ? 'smoke_short' : 'smoke_long', effectSourceCompId: comp.id, effectAffectedCompIds: affected, effectTurns: turns })
       combatStore.log(`烟幕 (${isShort ? '半' : '全'}回合): ${turns}回合`, 'effect')
       break
     }
@@ -962,12 +1056,17 @@ function executeTargetedCommand(
       if (cmdId === 'damage_control_repair') {
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         shipStore.healCompartment(comp.id, 2)
-        for (const ac of adj) shipStore.healCompartment(ac.id, 2)
+        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: comp.id, healAmount: 2 })
+        for (const ac of adj) {
+          shipStore.healCompartment(ac.id, 2)
+          if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: ac.id, healAmount: 2 })
+        }
         combatStore.log('综合修复 HP+2', 'effect')
       } else {
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         if (adj.length > 0) {
           shipStore.healCompartment(adj[0].id, 8)
+          if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: adj[0].id, healAmount: 8 })
           combatStore.log('快速抢修 HP+8', 'effect')
         }
       }
@@ -1055,9 +1154,9 @@ function executeTargetedCommand(
     }
   }
 
-  // 多人模式: 广播操作
+  // 多人模式: 广播战斗结果
   if (isMP.value && !replayingRemote && !isRelay) {
-    multiplayerClient.sendBattleLog(`${player.name} 使用 ${eqDef.name}`, 'system')
+    flushPendingResults(`${player.name} 使用 ${eqDef.name}`, 'system')
   }
 }
 
@@ -1067,6 +1166,10 @@ function applyHitDamage(compId: string, damage: number, source: string): void {
   if (!comp) return
   const result = shipStore.applyDamage(compId, damage)
   combatStore.log(`${source} → ${compId} ${damage}伤害${result.destroyed ? ' — 击毁!' : ''}`, result.destroyed ? 'destroy' : 'damage')
+  // 记录结果用于跨客户端同步
+  if (isMP.value && !replayingRemote) {
+    pendingResults.push({ op: 'damage', source, damages: [{ compartmentId: compId, damage, destroyed: result.destroyed }] })
+  }
   if (result.destroyed) handleCompDestroyed(compId)
 }
 
@@ -1092,13 +1195,13 @@ function handleCompDestroyed(compId: string): void {
 function ammoExplosion(compId: string): void {
   const adj = shipStore.getAdjacentCompartments(compId, 1)
   combatStore.log('弹药库殉爆! 殉爆8', 'destroy')
-  for (const c of adj) { const r = shipStore.applyDamage(c.id, 8); if (r.destroyed) handleCompDestroyed(c.id) }
+  for (const c of adj) applyHitDamage(c.id, 8, '弹药库殉爆')
 }
 
 function torpExplosion(compId: string): void {
   const adj = shipStore.getAdjacentCompartments(compId, 1)
   combatStore.log('鱼雷殉爆! 殉爆5', 'destroy')
-  for (const c of adj) shipStore.applyDamage(c.id, 5)
+  for (const c of adj) applyHitDamage(c.id, 5, '鱼雷殉爆')
 }
 
 function shipSunk(shipId: string): void {
@@ -1171,9 +1274,9 @@ function handleEndTurn(): void {
 
   uiStore.resetBattleState()
   if (isMP.value) {
+    // 先发送积累的战斗结果 (含鱼雷伤害/击毁等), 再发送回合结束
+    flushPendingResults(`${gameStore.currentPlayer!.name} 结束回合`, 'system')
     multiplayerClient.sendEndTurn()
-    multiplayerClient.sendBattleLog(`${gameStore.currentPlayer!.name} 结束回合`, 'system')
-    // 通知服务器弃牌
     multiplayerClient.discardDownTo(ship?.compartments.length ?? 5)
     return
   }

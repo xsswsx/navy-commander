@@ -46,6 +46,44 @@ export type BattleActionType =
   | 'playCard' | 'freeAction' | 'selectTarget' | 'selectShip'
   | 'selectCommand' | 'selectSpawn' | 'endTurn'
 
+/** 一次战斗操作的结果 (用于跨客户端同步) */
+export interface DamageResult {
+  compartmentId: string
+  damage: number
+  /** 该舱段是否在此次伤害中被击毁 */
+  destroyed?: boolean
+}
+
+export interface CombatActionResult {
+  /** 操作类型 */
+  op: 'damage' | 'addTorpedo' | 'addEffect' | 'addFighter' | 'compHeal' | 'move'
+  /** 来源装备类型 */
+  source?: string
+  /** 伤害列表 (op='damage') */
+  damages?: DamageResult[]
+  /** 发射鱼雷 (op='addTorpedo') */
+  torpSourceCompId?: string
+  torpTargetCompId?: string
+  torpCount?: number
+  torpTurns?: number
+  /** 添加效果 (op='addEffect') */
+  effectType?: string
+  effectSourceCompId?: string
+  effectAffectedCompIds?: string[]
+  effectTurns?: number
+  /** 起飞战斗机 (op='addFighter') */
+  fighterShipId?: string
+  fighterTeamId?: string
+  fighterCompId?: string
+  fighterTurns?: number
+  /** 维修 (op='compHeal') */
+  healCompId?: string
+  healAmount?: number
+  /** 移动 (op='move') */
+  fromCompIdx?: number
+  toCompIdx?: number
+}
+
 export interface BattleAction {
   type: BattleActionType
   cardId?: string
@@ -57,6 +95,8 @@ export interface BattleAction {
   /** 战斗日志消息 */
   logMessage?: string
   logType?: string
+  /** 战斗结果 (用于跨客户端同步) */
+  results?: CombatActionResult[]
 }
 
 // ==================== BattleInit 全量数据 ====================

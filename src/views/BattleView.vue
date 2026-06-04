@@ -202,6 +202,9 @@ if (isMP.value) {
     }
     // 如果是自己的回合，触发抽牌阶段
     if (t.playerSlotIndex === mySlotIndex.value) {
+      // startBattlePhase() 预置了 phase='draw', 直接赋相同值不会触发 watch
+      // 需要先切到其他 phase 再切回来, 确保 startDrawPhase 一定被调用
+      gameStore.currentTurnPhase = 'discard'
       gameStore.currentTurnPhase = 'draw'
     }
   }))
@@ -1131,6 +1134,7 @@ function getFullAirSuperiority(shipId: string, teamId: string): number {
 
 // ===== 回合结束 =====
 function handleEndTurn(): void {
+  if (!mpCanAct()) { ElMessage.warning('等待你的回合...'); return }
   const playerId = gameStore.currentPlayerId!
   const ship = gameStore.currentPlayer?.currentShipId
     ? shipStore.findShip(gameStore.currentPlayer.currentShipId) : null

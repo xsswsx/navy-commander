@@ -26,6 +26,9 @@ export const useCombatStore = defineStore('combat', () => {
   /** 鱼雷装填状态 compartmentId -> loaded */
   const torpedoLoaded = ref<Record<string, boolean>>({})
 
+  /** 弹药库每回合一次效果: 相邻战斗军备已在此回合享用过返还 */
+  const ammoDepotUsedThisTurn = ref<Record<string, boolean>>({})
+
   let effectIdCounter = 0
   let torpIdCounter = 0
   let tokenIdCounter = 0
@@ -191,6 +194,14 @@ export const useCombatStore = defineStore('combat', () => {
     torpedoLoaded.value[compartmentId] = loaded
   }
 
+  // ===== 弹药库每回合一次 =====
+  function canUseAmmoDepot(ammoCompId: string): boolean {
+    return !ammoDepotUsedThisTurn.value[ammoCompId]
+  }
+  function markAmmoDepotUsed(ammoCompId: string): void {
+    ammoDepotUsedThisTurn.value[ammoCompId] = true
+  }
+
   // ===== 每回合指挥/出击次数管理 =====
   function getCommandsUsed(compartmentId: string): number {
     return commandsUsedThisTurn.value[compartmentId] ?? 0
@@ -213,6 +224,7 @@ export const useCombatStore = defineStore('combat', () => {
   function resetPerTurnCounters(): void {
     commandsUsedThisTurn.value = {}
     sortiesUsedThisTurn.value = {}
+    ammoDepotUsedThisTurn.value = {}
   }
 
   function resetCombatStore(): void {
@@ -263,5 +275,7 @@ export const useCombatStore = defineStore('combat', () => {
     resetCombatStore,
     isTorpedoLoaded,
     setTorpedoLoaded,
+    canUseAmmoDepot,
+    markAmmoDepotUsed,
   }
 })

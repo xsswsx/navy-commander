@@ -363,6 +363,10 @@ function validateDesign(): boolean {
     return false
   }
   for (const ship of ships.value) {
+    if (ship.compartments.length === 0) {
+      ElMessage.warning(`舰船"${ship.name}"没有任何舱段`)
+      return false
+    }
     for (const slot of ship.compartments) {
       if (!slot.equipmentType && slot.slaveOfSlot == null) {
         ElMessage.warning('所有舱段必须安装军备（或被多舱段军备占用）')
@@ -447,8 +451,8 @@ function getEqTooltip(eq: ReturnType<typeof getEqDef>): string {
       lines.push('')
       lines.push('<b>【射击】</b>D8命中: 3-6=当前舱段, 2=前一舱段, 7=后一舱段')
       lines.push('伤害: <b>2D6</b>')
-      lines.push('<b>【盲射】</b>D8命中: 3-6=随机舱段')
-      lines.push('伤害: <b>2D6</b>')
+      lines.push('<b>【盲射】</b>对非本舰舰船执行两次D8, 3-6命中随机舱段')
+      lines.push('伤害: <b>2D6</b> (每次命中独立判定)')
       break
     case 'triple_cannon':
       lines.push('')
@@ -469,23 +473,23 @@ function getEqTooltip(eq: ReturnType<typeof getEqDef>): string {
       lines.push('机库 <b>1</b> (每回合最多出击1架次)')
       lines.push('<b>【起飞战斗机】</b>我方空优+2 (占用架次直到取消)')
       lines.push('<b>【起飞轰炸机】</b>16 - 非我方空优×D12')
-      lines.push('<b>【起飞鱼雷机】</b>1D12 - 非我方空优×2')
+      lines.push('<b>【起飞鱼雷机】</b>2D10 - 非我方空优D6')
       break
     case 'large_hangar':
       lines.push('')
       lines.push('<b>两舱段</b> 机库 (出击无单库限制)')
       lines.push('<b>【起飞战斗机】</b>我方空优+2 (占用架次直到取消)')
       lines.push('<b>【起飞轰炸机】</b>16 - 非我方空优×D12')
-      lines.push('<b>【起飞鱼雷机】</b>1D12 - 非我方空优×2')
+      lines.push('<b>【起飞鱼雷机】</b>2D10 - 非我方空优D6')
       break
     case 'ammo_depot':
       lines.push('')
-      lines.push('<b>【效果】</b>相邻战斗军备指挥所需行动 <b>-1</b>')
+      lines.push('<b>【效果】</b>相邻战斗军备一回合一次，发动指挥时返还一张指挥牌')
       lines.push('<b style="color:#f56c6c">被击毁时: 殉爆8 (相邻HP-8)</b>')
       break
     case 'fire_control':
       lines.push('')
-      lines.push('<b>【效果】</b>本舰舰炮攻击判定可调整 <b>±1</b>')
+      lines.push('<b>【效果】</b>本舰舰炮攻击获得 <b>1点</b> 优势判定')
       break
     case 'command_room':
       lines.push('')

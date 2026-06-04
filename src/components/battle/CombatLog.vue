@@ -13,7 +13,7 @@ const recentLogs = computed(() => {
 watch(() => combatStore.combatLog.length, async () => {
   await nextTick()
   if (logPanel.value) {
-    logPanel.value.scrollTop = logPanel.value.scrollHeight
+    logPanel.value.scrollTop = 0
   }
 })
 </script>

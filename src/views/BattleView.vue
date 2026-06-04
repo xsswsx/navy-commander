@@ -51,12 +51,15 @@ const showCommandDialog = ref(false)
 const commandDialogComp = ref<Compartment | null>(null)
 const commandDialogOptions = ref<{ id: string; name: string }[]>([])
 const spawnIndex = ref(0)
+/** 当前正在选择出生点的玩家的队伍 ID (热座: 从 spawnPlayerName 跟踪) */
+const spawnTeamId = ref('')
 const myTeamId = computed(() => {
   if (isMP.value && mySlotIndex.value >= 0) {
     const p = getPlayerBySlot(mySlotIndex.value)
     return p?.teamId ?? ''
   }
-  return gameStore.currentPlayer?.teamId ?? ''
+  // 热座: 使用当前正在生成的玩家的队伍
+  return spawnTeamId.value || gameStore.currentPlayer?.teamId || ''
 })
 
 // 防御: 防止远程操作触发本地操作再发送回服务器
@@ -315,6 +318,7 @@ function showSpawnForCurrent(): void {
     return
   }
   spawnPlayerName.value = player.name
+  spawnTeamId.value = player.teamId
   if (spawnIndex.value > 0) {
     transitionToName.value = player.name
     transitionVisible.value = true
@@ -440,7 +444,7 @@ function replayResults(results: import('@shared/protocol').CombatActionResult[],
       case 'damage': {
         for (const d of r.damages || []) {
           shipStore.applyDamage(d.compartmentId, d.damage)
-          combatStore.log(`${r.source || '?'} → ${d.compartmentId} ${d.damage}伤害${d.destroyed ? ' — 击毁!' : ''}`, d.destroyed ? 'destroy' : 'damage')
+          combatStore.log(`${r.source || '?'} → ${compLabel(d.compartmentId)} ${d.damage}伤害${d.destroyed ? ' — 击毁!' : ''}`, d.destroyed ? 'destroy' : 'damage')
           // 注意: 发送方已在 results 中包含了链式反应伤害 (弹药库殉爆等),
           // 所以不在重放端再次触发 handleCompDestroyed, 避免重复伤害
         }
@@ -983,20 +987,35 @@ function executeTargetedCommand(
       const isDual = eqType === 'dual_cannon'
       const isBlind = cmdId.includes('blindfire')
 
-      let hitCompId: string | null = null
-      const d8 = rollDice('D8')
-
       if (isBlind) {
-        if (d8 < 3 || d8 > 6) {
-          combatStore.log(`[盲射 D8=${d8}] 未命中!`, 'info')
-          return
-        }
+        // 盲射: 对一个非本舰舰船执行 D8 判定 (二联装炮: 两次)
         const targetShip = shipStore.findShip(targetId)
         if (!targetShip) return
-        const living = shipStore.getLivingCompartments(targetShip.id)
-        if (living.length === 0) return
-        hitCompId = living[Math.floor(Math.random() * living.length)].id
+        const livingAll = shipStore.getLivingCompartments(targetShip.id)
+        if (livingAll.length === 0) return
+        const attacks = isDual ? 2 : 1
+        let totalDmg = 0
+        for (let a = 0; a < attacks; a++) {
+          const d8 = rollDice('D8')
+          if (d8 < 3 || d8 > 6) {
+            combatStore.log(`[盲射#${a+1} D8=${d8}] ${eqDef.name} 未命中!`, 'info')
+            continue
+          }
+          const hitComp = livingAll[Math.floor(Math.random() * livingAll.length)]
+          const dmgCount = isDual ? 2 : 3
+          const dmgResults = rollMultiple('D6', dmgCount)
+          const dmg = dmgResults.reduce((a2, b2) => a2 + b2, 0)
+          totalDmg += dmg
+          combatStore.log(`[盲射#${a+1} D8=${d8}] ${eqDef.name} 命中 → ${dmgCount}D6=${dmg}`, 'system')
+          applyHitDamage(hitComp.id, dmg, eqDef.name)
+        }
+        if (totalDmg === 0 && attacks > 1) {
+          combatStore.log(`${eqDef.name} 盲射: 全部未命中!`, 'info')
+        }
       } else {
+        // 射击 (瞄准)
+        let hitCompId: string | null = null
+        const d8 = rollDice('D8')
         const targetShip = shipStore.getShipByCompartment(targetId)
         const hasAB = targetShip?.compartments.some(c => c.equipmentType === 'afterburner' && !c.isDestroyed)
         combatStore.log(`[射击 D8=${d8}] ${hasAB ? '目标有加力引擎' : ''}`, 'system')
@@ -1010,18 +1029,18 @@ function executeTargetedCommand(
           else if (d8 === 2) hitCompId = adjacentComp(targetId, -1)
           else if (d8 === 7) hitCompId = adjacentComp(targetId, 1)
         }
-      }
 
-      if (!hitCompId) {
-        combatStore.log(`${eqDef.name} 未命中!`, 'info')
-        return
-      }
+        if (!hitCompId) {
+          combatStore.log(`${eqDef.name} 未命中!`, 'info')
+          return
+        }
 
-      const dmgCount = isDual ? 2 : 3
-      const dmgResults = rollMultiple('D6', dmgCount)
-      const totalDmg = dmgResults.reduce((a, b) => a + b, 0)
-      combatStore.log(`[伤害] ${dmgCount}D6 = ${totalDmg}`, 'system')
-      applyHitDamage(hitCompId, totalDmg, eqDef.name)
+        const dmgCount = isDual ? 2 : 3
+        const dmgResults = rollMultiple('D6', dmgCount)
+        const totalDmg = dmgResults.reduce((a2, b2) => a2 + b2, 0)
+        combatStore.log(`[伤害] ${dmgCount}D6 = ${totalDmg}`, 'system')
+        applyHitDamage(hitCompId, totalDmg, eqDef.name)
+      }
       break
     }
 
@@ -1064,9 +1083,11 @@ function executeTargetedCommand(
         applyHitDamageToRandom(tgtShipId, dmg, '轰炸机')
       } else if (cmdId.includes('torpedo')) {
         const nfa = getFullAirSuperiority(tgtShipId, player.teamId)
-        const d12 = rollDice('D12')
-        const dmg = Math.max(0, d12 - nfa * 2)
-        combatStore.log(`[鱼雷机] 非我方空优=${nfa}, D12=${d12}, 伤害=${dmg}`, 'system')
+        const d6 = rollDice('D6')
+        const d10a = rollDice('D10')
+        const d10b = rollDice('D10')
+        const dmg = Math.max(0, d10a + d10b - nfa * d6)
+        combatStore.log(`[鱼雷机] 非我方空优=${nfa}, D6=${d6}, 2D10=${d10a}+${d10b}, 伤害=${dmg}`, 'system')
         applyHitDamageToRandom(tgtShipId, dmg, '鱼雷机')
       }
       break
@@ -1193,15 +1214,16 @@ function executeTargetedCommand(
       combatStore.log(`${eqDef.name} 效果执行`, 'info')
   }
 
-  // 弹药库效果
+  // 弹药库效果: 相邻战斗军备一回合一次, 发动指挥时返还一张指挥牌
   if (eqDef.category === 'combat') {
     const compShip = shipStore.getShipByCompartment(comp.id)
     if (compShip) {
       const adj = shipStore.getAdjacentCompartments(comp.id, 1)
-      const hasAmmoDepot = adj.some(c => c.equipmentType === 'ammo_depot' && !c.isDestroyed)
-      if (hasAmmoDepot) {
+      const ammoDepot = adj.find(c => c.equipmentType === 'ammo_depot' && !c.isDestroyed)
+      if (ammoDepot && combatStore.canUseAmmoDepot(ammoDepot.id)) {
+        combatStore.markAmmoDepotUsed(ammoDepot.id)
         cardStore.addCardToHand(playerId, 'command')
-        combatStore.log('弹药库效果: 返还一张指挥牌', 'effect')
+        combatStore.log('弹药库效果: 一回合一次，返还一张指挥牌', 'effect')
       }
     }
   }
@@ -1213,11 +1235,19 @@ function executeTargetedCommand(
 }
 
 // ===== 伤害 =====
+function compLabel(compId: string): string {
+  const comp = shipStore.findCompartment(compId)
+  if (!comp) return compId
+  const ship = shipStore.findShip(comp.shipId)
+  const shipName = ship?.name ?? comp.shipId
+  return `${shipName} 第${comp.position + 1}舱段`
+}
+
 function applyHitDamage(compId: string, damage: number, source: string): void {
   const comp = shipStore.findCompartment(compId)
   if (!comp) return
   const result = shipStore.applyDamage(compId, damage)
-  combatStore.log(`${source} → ${compId} ${damage}伤害${result.destroyed ? ' — 击毁!' : ''}`, result.destroyed ? 'destroy' : 'damage')
+  combatStore.log(`${source} → ${compLabel(compId)} ${damage}伤害${result.destroyed ? ' — 击毁!' : ''}`, result.destroyed ? 'destroy' : 'damage')
   // 记录结果用于跨客户端同步
   if (isMP.value && !replayingRemote) {
     pendingResults.push({ op: 'damage', source, damages: [{ compartmentId: compId, damage, destroyed: result.destroyed }] })
@@ -1322,7 +1352,7 @@ function handleEndTurn(): void {
 
   for (const torp of combatStore.tickTorpedoes()) {
     for (let i = 0; i < torp.torpedoCount; i++) {
-      applyHitDamage(torp.targetCompartmentId, rollDice('D12'), '鱼雷')
+      applyHitDamage(torp.targetCompartmentId, rollDice('D10'), '鱼雷')
     }
   }
 

@@ -249,9 +249,10 @@ io.on('connection', (socket) => {
     const occ = occupiedSlots(room)
     const allSpawned = occ.every(idx => room.spawns.has(idx))
     if (allSpawned) {
-      room.currentTurnSlot = occ[0]
-      const payload = { playerSlotIndex: occ[0], roundNumber: room.roundNumber }
-      console.log(`[battle:spawn] all spawned → turn slot ${occ[0]}`)
+      const turnOrder = room.lastBattleInit?.turnOrder || occ
+      room.currentTurnSlot = turnOrder[0]
+      const payload = { playerSlotIndex: turnOrder[0], roundNumber: room.roundNumber }
+      console.log(`[battle:spawn] all spawned → turn slot ${turnOrder[0]}`)
       io.to(slot.code).emit('battle:turn', payload)
     }
   })
@@ -262,13 +263,13 @@ io.on('connection', (socket) => {
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
     if (room.currentTurnSlot !== slot.slotIndex) return
-    const occ = occupiedSlots(room)
-    const curIdx = occ.indexOf(room.currentTurnSlot)
+    const turnOrder = room.lastBattleInit?.turnOrder || occupiedSlots(room)
+    const curIdx = turnOrder.indexOf(room.currentTurnSlot)
     if (curIdx < 0) return
-    const nextIdx = (curIdx + 1) % occ.length
+    const nextIdx = (curIdx + 1) % turnOrder.length
     // 检测回合数变化 (绕回一圈 → 新回合)
     if (nextIdx === 0) room.roundNumber++
-    room.currentTurnSlot = occ[nextIdx]
+    room.currentTurnSlot = turnOrder[nextIdx]
     const payload = { playerSlotIndex: room.currentTurnSlot, roundNumber: room.roundNumber }
     io.to(slot.code).emit('battle:turn', payload)
     const playerName = room.state.slots[room.currentTurnSlot]?.playerName || '?'

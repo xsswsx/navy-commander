@@ -351,7 +351,7 @@ function handleSpawnSelect(compartmentId: string): void {
 // ===== 远程操作回放 =====
 function handleRemoteAction(action: BattleAction): void {
   const senderSlot = action.senderSlotIndex ?? -1
-  const senderPlayer = gameStore.players[senderSlot]
+  const senderPlayer = getPlayerBySlot(senderSlot)
   if (!senderPlayer) return
 
   if (action.logMessage) {

@@ -355,6 +355,44 @@ io.on('connection', (socket) => {
     socket.emit('card:drawn', { cards: [], hand: hand })
   })
 
+  // 谋划牌: 己方全员抽1张
+  socket.on('card:scheme', ({ cardId }) => {
+    const slot = getMySlot(socket.id)
+    if (!slot) return
+    const room = getRoom(slot.code)
+    if (!room) return
+    // 弃置谋划牌
+    const hand = room.playerHands.get(slot.slotIndex) || []
+    const idx = hand.findIndex((c: CardData) => c.id === cardId)
+    if (idx !== -1) {
+      const [card] = hand.splice(idx, 1)
+      room.discardPile.push(card)
+      room.playerHands.set(slot.slotIndex, hand)
+      socket.emit('card:drawn', { cards: [], hand: hand })
+    }
+    // 寻找同一阵营的存活玩家
+    const senderTeam = room.state.slots[slot.slotIndex]?.teamId
+    if (!senderTeam) return
+    const teamSlots = room.state.slots.filter(s => s.teamId === senderTeam && s.playerName)
+    const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
+    for (const s of teamSlots) {
+      const { drawn, newDraw, newDiscard } = drawFromDeck(room.drawPile, room.discardPile, 1)
+      room.drawPile = newDraw
+      room.discardPile = newDiscard
+      const th = room.playerHands.get(s.index) || []
+      th.push(...drawn)
+      room.playerHands.set(s.index, th)
+      // 通知该槽位对应客户端
+      if (s.socketId) {
+        io.to(s.socketId).emit('card:drawn', { cards: drawn, hand: th })
+      }
+    }
+    io.to(slot.code).emit('battle:log', {
+      message: `${playerName} 使用谋划，己方全员抽1张牌`,
+      type: 'system', timestamp: Date.now(),
+    })
+  })
+
   // ===================== 战斗日志 =====================
   socket.on('battle:log', ({ message, type }) => {
     const slot = getMySlot(socket.id)

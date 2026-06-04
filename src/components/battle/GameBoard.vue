@@ -47,7 +47,16 @@ function isCurrentPlayerOnComp(compId: string): boolean {
   const ship = shipStore.findShip(player.currentShipId)
   if (!ship) return false
   const comp = ship.compartments[player.currentCompartmentIndex ?? 0]
-  return comp?.id === compId
+  if (!comp) return false
+  // 直接在舱段上
+  if (comp.id === compId) return true
+  // 在从属舱段上，comp.multiCompRootId 是主舱段 ID → 主舱段也标记为当前玩家
+  const masterId = comp.multiCompRootId
+  if (masterId) {
+    const master = ship.compartments.find(c => c.id === masterId)
+    if (master && master.multiCompSlaveIds.includes(compId)) return true
+  }
+  return false
 }
 
 function isOwnTeamShip(ship: Ship): boolean {
@@ -111,6 +120,25 @@ function isMultiCompSlave(comp: Compartment): boolean {
   return comp.multiCompRootId != null
 }
 
+function getCompTooltip(comp: Compartment): string {
+  if (!comp.equipmentType) return '空舱段'
+  const eq = getEquipment(comp.equipmentType)
+  if (!eq) return comp.equipmentType
+  const lines: string[] = []
+  const catName = eq.category === 'combat' ? '战斗军备' : eq.category === 'support' ? '支援军备' : '资源军备'
+  lines.push(`<b>【${eq.name}】${catName}</b>`)
+  lines.push(`抽牌 ${eq.drawValue} | HP ${eq.hpModifier >= 0 ? '+' : ''}${eq.hpModifier}`)
+  if (eq.compartmentSpan > 1) lines.push(`多舱段: ${eq.compartmentSpan}舱段`)
+  if (eq.commandsPerTurn > 0) lines.push(`每回合指挥: ${eq.commandsPerTurn}次`)
+  if (eq.commands.length > 0) {
+    lines.push('<b>指令:</b>')
+    for (const cmd of eq.commands) {
+      lines.push(`  · ${cmd.name} (${cmd.targeting.scope})`)
+    }
+  }
+  return lines.join('<br/>')
+}
+
 function getCompBorderStyle(comp: Compartment, ship: Ship): string {
   if (comp.isDestroyed) return 'destroyed'
   if (combatStore.isCompartmentSmoked(comp.id)) return 'smoked'
@@ -122,8 +150,15 @@ function getCompBorderStyle(comp: Compartment, ship: Ship): string {
 }
 
 function getSpawnPlayers(comp: Compartment, ship: Ship): string[] {
+  // 将属于该槽位的所有位置列出 (含多舱段军备从属舱段)
+  const positions = new Set<number>([comp.position])
+  for (const c of ship.compartments) {
+    if (c.multiCompRootId === comp.id || comp.multiCompSlaveIds.includes(c.id)) {
+      positions.add(c.position)
+    }
+  }
   return gameStore.players
-    .filter(p => p.isAlive && p.currentShipId === ship.id && p.currentCompartmentIndex === comp.position)
+    .filter(p => p.isAlive && p.currentShipId === ship.id && positions.has(p.currentCompartmentIndex ?? -1))
     .map(p => p.name)
 }
 
@@ -235,13 +270,21 @@ function getFighterGroups(shipId: string): { teamId: string; color: string; coun
         </div>
 
         <div class="compartment-row">
-          <div
+          <el-tooltip
             v-for="comp in ship.compartments"
             :key="comp.id"
-            class="compartment-cell"
-            :class="getCompBorderStyle(comp, ship)"
-            @click.stop="handleCompClick(comp.id)"
+            :content="getCompTooltip(comp)"
+            placement="top"
+            effect="dark"
+            :show-after="400"
+            :hide-after="0"
+            raw-content
           >
+            <div
+              class="compartment-cell"
+              :class="getCompBorderStyle(comp, ship)"
+              @click.stop="handleCompClick(comp.id)"
+            >
             <!-- HP条 -->
             <div class="comp-hp-bar">
               <div
@@ -312,6 +355,7 @@ function getFighterGroups(shipId: string): { teamId: string; color: string; coun
               <span class="target-crosshair">⊙</span>
             </div>
           </div>
+          </el-tooltip>
         </div>
       </div>
     </div>

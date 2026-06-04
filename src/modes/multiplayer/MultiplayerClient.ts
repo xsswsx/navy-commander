@@ -35,6 +35,7 @@ export class MultiplayerClient {
   drawCards(count: number): void { this.socket?.emit('card:draw', { count }) }
   discardCards(cardIds: string[]): void { this.socket?.emit('card:discard', { cardIds }) }
   discardDownTo(maxCards: number): void { this.socket?.emit('card:discardDownTo', { maxCards }) }
+  sendSchemeCard(cardId: string): void { this.socket?.emit('card:scheme', { cardId }) }
 
   // 设计阶段
   requestDesignState(): void { this.socket?.emit('design:requestState') }

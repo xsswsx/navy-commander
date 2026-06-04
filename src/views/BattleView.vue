@@ -606,8 +606,9 @@ function handleSchemeCard(cardId: string): void {
   }
   combatStore.log(`${player.name} 使用谋划，己方全员抽1张牌`, 'system')
   if (isMP.value) {
-    multiplayerClient.discardCards([cardId])
-    multiplayerClient.sendBattleLog(`${player.name} 使用谋划，己方全员抽1张牌`, 'system')
+    // 服务端管理牌堆和全员抽牌同步
+    multiplayerClient.sendSchemeCard(cardId)
+    return
   }
 }
 
@@ -871,8 +872,10 @@ function enterShipTargeting(comp: Compartment, cmdId: string, scope: string): vo
       .filter(s => s.ownerTeamId === player.teamId && shipStore.getLivingCompartments(s.id).length > 0)
       .map(s => s.id)
   } else {
+    // integrated_command 只能指挥本阵营舰船的舱段
+    const sameTeamOnly = comp.equipmentType === 'integrated_command'
     validIds = shipStore.ships
-      .filter(s => shipStore.getLivingCompartments(s.id).length > 0)
+      .filter(s => (!sameTeamOnly || s.ownerTeamId === player.teamId) && shipStore.getLivingCompartments(s.id).length > 0)
       .map(s => s.id)
   }
 
@@ -946,9 +949,14 @@ function executeTargetedCommand(
   const eqType = comp.equipmentType
   const eqDef = getEquipment(eqType)
 
-  combatStore.useCommand(comp.id)
+  // 命令中继装备 (command_room/command_center/integrated_command):
+  // card 和 command count 在中继成功后扣除, 避免中继失败时白扣
+  const isRelaySrc = !isRelay && ['command_room', 'command_center', 'integrated_command'].includes(eqType)
 
-  if (!isRelay) {
+  if (!isRelaySrc) {
+    combatStore.useCommand(comp.id)
+  }
+  if (!isRelay && !isRelaySrc) {
     if (uiStore.selectedCardIds.length > 0) {
       cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
       if (isMP.value && !replayingRemote) multiplayerClient.discardCards(uiStore.selectedCardIds)
@@ -1086,11 +1094,19 @@ function executeTargetedCommand(
     case 'command_room':
     case 'command_center':
     case 'integrated_command': {
-      const tgtComp = shipStore.findCompartment(targetId)
+      // targetId 可能是 compartment ID (command_room) 或 ship ID (command_center/integrated_command)
+      // ship ID 时需找到该舰船上有指挥能力的第一个舱段
+      let tgtComp = shipStore.findCompartment(targetId)
+      if (!tgtComp) {
+        const tgtShip = shipStore.findShip(targetId)
+        if (tgtShip) {
+          tgtComp = tgtShip.compartments.find(c => c.equipmentType && !c.isDestroyed && getEquipment(c.equipmentType).commands.length > 0) ?? null
+        }
+      }
+      let relayed = false
       if (tgtComp && tgtComp.equipmentType) {
         const tgtEq = getEquipment(tgtComp.equipmentType)
         if (tgtEq.commands.length > 0) {
-          combatStore.log(`${player.name} 发令 → ${tgtEq.name}`, 'system')
           const relayedCmd = tgtEq.commands[0]
           let relayTarget = targetId
           if (relayedCmd.targeting.scope === 'enemy-compartment' || relayedCmd.targeting.scope === 'enemy-ship') {
@@ -1106,8 +1122,21 @@ function executeTargetedCommand(
               relayTarget = living.length > 0 ? living[0].id : ownShip.id
             }
           }
+          combatStore.log(`${player.name} 发令 → ${tgtEq.name}`, 'system')
           executeTargetedCommand(tgtComp, relayedCmd.id, relayTarget, true)
+          relayed = true
         }
+      }
+      // 中继成功后才消耗资源和计数
+      if (isRelaySrc && relayed) {
+        combatStore.useCommand(comp.id)
+        if (uiStore.selectedCardIds.length > 0) {
+          cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
+          if (isMP.value && !replayingRemote) multiplayerClient.discardCards(uiStore.selectedCardIds)
+        }
+        if (uiStore.isFreeAction) gameStore.useFreeAction()
+      } else if (isRelaySrc && !relayed) {
+        ElMessage.warning('中继目标无效 — 未消耗资源')
       }
       break
     }

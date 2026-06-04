@@ -126,7 +126,7 @@ const allEquipment: EquipmentDefinition[] = [
     hpModifier: 0,
     compartmentSpan: 2,
     tags: ['hangar'],
-    commandsPerTurn: 0,  // 无限制
+    commandsPerTurn: 3,  // 每回合至多3次
     sortieCapacity: 0,  // 由机库总数决定
     passiveEffects: [],
     commands: [

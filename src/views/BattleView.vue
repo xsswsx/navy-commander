@@ -63,6 +63,7 @@ const myTeamId = computed(() => {
 let replayingRemote = false
 /** 当前操作积累的战斗结果 (操作完成后一次性发送) */
 let pendingResults: import('@shared/protocol').CombatActionResult[] = []
+let mpPendingDrawPhase = false
 function flushPendingResults(logMsg?: string, logType?: string): void {
   if (pendingResults.length === 0) return
   multiplayerClient.sendAction({
@@ -223,11 +224,12 @@ if (isMP.value) {
     if (player) {
       combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
     }
-    // 如果是自己的回合，直接进入抽牌阶段 (不依赖 phase watcher)
+    // 新回合开始时, 移除该玩家在上一个自己回合派出的战斗机 (所有客户端同步)
+    if (pid) combatStore.removeFightersByPlayer(pid)
+    // 如果是自己的回合，直接进入抽牌阶段
     if (t.playerSlotIndex === mySlotIndex.value) {
       combatStore.resetPerTurnCounters()
       uiStore.resetBattleState()
-      if (pid) combatStore.removeFightersByPlayer(pid)
       startDrawPhase()
     }
   }))
@@ -248,6 +250,11 @@ if (isMP.value) {
     const pid = slotToPlayerId.value[mySlotIndex.value]
     if (pid) {
       cardStore.playerHands[pid] = d.hand as any
+    }
+    // 如果正在等待抽牌完成, 进入行动阶段
+    if (mpPendingDrawPhase) {
+      mpPendingDrawPhase = false
+      gameStore.advancePhase()
     }
   }))
 }
@@ -501,12 +508,15 @@ function startDrawPhase(): void {
       drawAmount += compensation
       combatStore.log(`${player.name} 第一轮后攻补偿 +${compensation}张`, 'system')
     }
-    if (drawAmount > 0) multiplayerClient.drawCards(drawAmount)
+    if (drawAmount > 0) {
+      mpPendingDrawPhase = true
+      multiplayerClient.drawCards(drawAmount)
+    } else {
+      gameStore.advancePhase()
+    }
     combatStore.log(`${player.name} 在 ${comp ? getEquipment(comp.equipmentType!)?.name ?? '空舱段' : '?'} 抽 ${drawAmount} 张`, 'system')
     combatStore.resetPerTurnCounters()
     uiStore.resetBattleState()
-    combatStore.removeFightersByPlayer(playerId)
-    gameStore.advancePhase()
     return
   }
 

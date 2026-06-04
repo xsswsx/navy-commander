@@ -78,7 +78,26 @@ function leaveSlot(): void { multiplayerClient.leaveSlot() }
 function startGame(): void { multiplayerClient.startGame() }
 
 function copyCode(): void {
-  if (room.value) { navigator.clipboard.writeText(room.value.code); ElMessage.success('已复制') }
+  if (!room.value) return
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(room.value.code).then(() => {
+      ElMessage.success('已复制')
+    }).catch(() => {
+      fallbackCopy(room.value!.code)
+    })
+  } else {
+    fallbackCopy(room.value.code)
+  }
+}
+
+function fallbackCopy(text: string): void {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'; ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  try { document.execCommand('copy'); ElMessage.success('已复制') } catch { ElMessage.error('复制失败，请手动复制') }
+  document.body.removeChild(ta)
 }
 
 function getTeamColor(teamId: string): string {

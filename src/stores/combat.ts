@@ -125,11 +125,13 @@ export const useCombatStore = defineStore('combat', () => {
     fighterTokens.value = fighterTokens.value.filter(t => t.sourcePlayerId !== playerId)
   }
 
-  /** 每个回合结束时递减战斗机剩余回合 (0回合的在下个回合开始移除) */
+  /** 每个回合结束时递减战斗机剩余回合, 并移除到期的 */
   function tickFighterTurns(): void {
     for (const t of fighterTokens.value) {
       if (t.remainingTurns > 0) t.remainingTurns--
     }
+    // 移除到期的战斗机 (所有客户端看到一致的结果)
+    fighterTokens.value = fighterTokens.value.filter(t => t.remainingTurns > 0)
   }
 
   function removeFighterToken(tokenId: string): void {

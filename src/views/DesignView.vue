@@ -74,7 +74,8 @@ onMounted(() => {
     mpSlots.value = r.slots || []
     mpReadyTeams.value = r.readyTeams || []
     if (r.phase === 'battle' && !battleInitReceived) {
-      // battle:init 也会单独抵达，这里做兜底
+      // 兜底: battle:init 没有到达，主动请求
+      multiplayerClient.requestBattleInit()
     }
   })
   multiplayerClient.onDesignState((d) => {
@@ -134,12 +135,17 @@ function loadBattleAndGo(payload: any): void {
     // 直接设置服务端传来的牌堆和手牌
     cardStore.drawPile = payload.drawPile
     cardStore.discardPile = payload.discardPile || []
+    // 构建 slotIndex → player.id 映射 (处理非连续槽位)
+    const slotToPid: Record<number, string> = {}
+    for (let i = 0; i < payload.players.length; i++) {
+      const p = gameStore.players[i]
+      if (p) slotToPid[payload.players[i].slotIndex] = p.id
+    }
     cardStore.playerHands = {}
     for (const [si, hand] of Object.entries(payload.playerHands)) {
-      const slotIndex = Number(si)
-      const player = gameStore.players[slotIndex]
-      if (player) {
-        cardStore.playerHands[player.id] = hand as any[]
+      const pid = slotToPid[Number(si)]
+      if (pid) {
+        cardStore.playerHands[pid] = hand as any[]
       }
     }
   } else {
@@ -175,11 +181,21 @@ function mpReady(): void {
   if (existing.length === 0) confirmDesign()
   multiplayerClient.setReady()
   isTeamReady.value = true
+  // 乐观更新指示灯 (不等服务器回应)
+  const tid = currentTeamId.value
+  if (tid && !mpReadyTeams.value.includes(tid)) {
+    mpReadyTeams.value = [...mpReadyTeams.value, tid]
+  }
 }
 
 function mpCancelReady(): void {
   multiplayerClient.cancelReady()
   isTeamReady.value = false
+  // 乐观更新指示灯 (不等服务器回应)
+  const tid = currentTeamId.value
+  if (tid) {
+    mpReadyTeams.value = mpReadyTeams.value.filter(t => t !== tid)
+  }
 }
 
 const designLocked = computed(() => isMultiplayer.value && isTeamReady.value)
@@ -190,10 +206,12 @@ function addShip(): void {
 }
 
 function removeShip(index: number): void {
+  if (designLocked.value) return
   ships.value.splice(index, 1)
 }
 
 function addCompartment(shipIndex: number): void {
+  if (designLocked.value) return
   if (remainingCompartments.value < 1) {
     ElMessage.warning('没有剩余舱段配额')
     return
@@ -209,6 +227,7 @@ function addCompartment(shipIndex: number): void {
 }
 
 function removeCompartment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
 
@@ -247,6 +266,7 @@ function selectEquipment(type: EquipmentType): void {
 }
 
 function placeEquipment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   if (!selectedEquipment.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
@@ -306,6 +326,7 @@ function removeEquipmentFromSlot(ship: typeof ships.value[0], slotIndex: number)
 }
 
 function removeEquipment(shipIndex: number, slotIndex: number): void {
+  if (designLocked.value) return
   const ship = ships.value[shipIndex]
   const slot = ship.compartments[slotIndex]
   if (!slot) return
@@ -822,7 +843,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
             </span>
           </div>
           <div class="design-actions">
-            <el-button type="primary" @click="addShip">添加舰船</el-button>
+            <el-button type="primary" @click="addShip" :disabled="designLocked">添加舰船</el-button>
           </div>
         </div>
 
@@ -832,13 +853,13 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 
         <div v-for="(ship, si) in ships" :key="si" class="ship-designer">
           <div class="ship-header">
-            <el-input v-model="ship.name" size="small" style="width: 180px" />
+            <el-input v-model="ship.name" size="small" style="width: 180px" :readonly="designLocked" />
             <span>舱段数: {{ ship.compartments.length }}</span>
-            <el-button size="small" @click="addCompartment(si)" :disabled="remainingCompartments < 1">
+            <el-button size="small" @click="addCompartment(si)" :disabled="remainingCompartments < 1 || designLocked">
               添加舱段
             </el-button>
-            <el-button size="small" type="success" @click="saveShipAsPreset(si)">保存为预设</el-button>
-            <el-button size="small" type="danger" @click="removeShip(si)">移除舰船</el-button>
+            <el-button size="small" type="success" @click="saveShipAsPreset(si)" :disabled="designLocked">保存为预设</el-button>
+            <el-button size="small" type="danger" @click="removeShip(si)" :disabled="designLocked">移除舰船</el-button>
           </div>
 
           <div class="compartment-row">
@@ -848,11 +869,12 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
               class="compartment-slot"
               :class="{
                 'has-equipment': slot.equipmentType || slot.slaveOfSlot != null,
-                targeted: selectedEquipment && slot.slaveOfSlot == null,
+                targeted: selectedEquipment && slot.slaveOfSlot == null && !designLocked,
                 slave: slot.slaveOfSlot != null,
                 master: isSlotMaster(slot),
+                locked: designLocked,
               }"
-              @click="slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci))"
+              @click="!designLocked && (slot.slaveOfSlot != null ? removeEquipment(si, ci) : (slot.equipmentType ? removeEquipment(si, ci) : placeEquipment(si, ci)))"
             >
               <div class="slot-index">#{{ ci + 1 }}</div>
               <div class="slot-equipment">
@@ -865,7 +887,7 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
                 HP: {{ compPreviewHP(si, ci) }}
               </div>
               <el-button
-                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null"
+                v-if="ship.compartments.length > 1 && slot.slaveOfSlot == null && !designLocked"
                 class="slot-remove"
                 size="small"
                 type="danger"
@@ -1148,6 +1170,11 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 
 .compartment-slot.master {
   border-color: #e6a23c;
+}
+
+.compartment-slot.locked {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .slot-index {

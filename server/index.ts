@@ -127,6 +127,7 @@ io.on('connection', (socket) => {
         const teamStillOccupied = room.state.slots.some(s => s.teamId === teamId && s.playerName)
         if (!teamStillOccupied) {
           room.readyTeams.delete(teamId)
+          room.state.readyTeams = [...room.readyTeams]
         }
       }
     }

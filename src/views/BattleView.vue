@@ -68,32 +68,13 @@ function getPlayerBySlot(slotIndex: number) {
 // ===== 多人模式: 注册事件监听 (在组件 setup 阶段) =====
 if (isMP.value) {
   mpCleanups.push(multiplayerClient.onBattleInit((payload: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => {
-    // 如果已经初始化过 (可能由 DesignView 预先初始化)，跳过
-    if (gameStore.players.length > 0 && shipStore.ships.length > 0) {
-      // 只更新回合/出生点状态
-      if (payload.currentTurnSlot !== undefined) currentTurnSlot.value = payload.currentTurnSlot
-      if (payload.roundNumber) mpRoundNumber.value = payload.roundNumber
-      // 更新手牌 (服务端为最新权威来源)
-      if (payload.playerHands) {
-        cardStore.playerHands = {}
-        for (const [si, hand] of Object.entries(payload.playerHands)) {
-          const pid = slotToPlayerId.value[Number(si)]
-          if (pid) cardStore.playerHands[pid] = hand as any
-        }
-      }
-      return
-    }
-    // 初始化舰船
-    for (const [teamId, designs] of Object.entries(payload.ships)) {
-      const rep = payload.players.find((p: any) => p.teamId === teamId)
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
-    }
-    // 初始化队伍和玩家
+    // ====== 第一步: 总是建立槽位映射 (无论是否已初始化) ======
+    // 如果队伍/玩家还没初始化，先初始化
     if (gameStore.players.length === 0) {
       gameStore.initTeams(payload.teams.map((t: any) => ({ id: t.id, name: t.name || t.id, color: t.color })))
       gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
     }
-    // 建立 slotIndex ↔ playerId 映射
+    // 建立 slotIndex ↔ player.id 映射
     const slotMap: Record<number, string> = {}
     const pidMap: Record<string, number> = {}
     for (let i = 0; i < payload.players.length; i++) {
@@ -106,13 +87,51 @@ if (isMP.value) {
     slotToPlayerId.value = slotMap
     playerIdToSlot.value = pidMap
 
-    // 尝试通过 playerName 匹配本客户端槽位
+    // 通过 playerName 匹配本客户端槽位
     const storedName = localStorage.getItem('mp_playerId') || ''
     for (let i = 0; i < payload.players.length; i++) {
       if (payload.players[i].name === storedName) {
         mySlotIndex.value = payload.players[i].slotIndex
         break
       }
+    }
+
+    // ====== 第二步: 如果已经初始化过 (DesignView 预初始化)，只更新状态 ======
+    if (shipStore.ships.length > 0) {
+      // 更新手牌 (服务端为最新权威来源)
+      cardStore.drawPile = payload.drawPile as any
+      cardStore.discardPile = (payload.discardPile || []) as any
+      cardStore.playerHands = {}
+      for (const [si, hand] of Object.entries(payload.playerHands)) {
+        const pid = slotToPlayerId.value[Number(si)]
+        if (pid) cardStore.playerHands[pid] = hand as any
+      }
+      // 回复联机状态
+      if (payload.currentTurnSlot !== undefined) currentTurnSlot.value = payload.currentTurnSlot
+      if (payload.roundNumber) mpRoundNumber.value = payload.roundNumber
+      // 重放战斗日志
+      if (payload.battleLog) {
+        for (const entry of payload.battleLog) {
+          combatStore.log(entry.message, entry.type as any)
+        }
+      }
+      // 检查是否已选择出生点
+      const alreadySpawned = payload.spawns?.find((s: any) => s.slotIndex === mySlotIndex.value)
+      if (!alreadySpawned) {
+        const myP = getPlayerBySlot(mySlotIndex.value)
+        if (myP && !myP.currentShipId) {
+          spawnPlayerName.value = myP.name
+          showSpawnDialog.value = true
+        }
+      }
+      return
+    }
+
+    // ====== 第三步: 首次初始化 (舰船/牌堆/战斗日志) ======
+    // 初始化舰船
+    for (const [teamId, designs] of Object.entries(payload.ships)) {
+      const rep = payload.players.find((p: any) => p.teamId === teamId)
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
     }
 
     // 使用服务器牌堆

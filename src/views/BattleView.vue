@@ -128,10 +128,20 @@ if (isMP.value) {
     }
 
     // ====== 第三步: 首次初始化 (舰船/牌堆/战斗日志) ======
-    // 初始化舰船
+    // 初始化舰船 (转换 ShipDesignData → ShipDesign 格式)
     for (const [teamId, designs] of Object.entries(payload.ships)) {
       const rep = payload.players.find((p: any) => p.teamId === teamId)
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
+      const shipDesigns = (designs as any[]).map(d => ({
+        name: d.name,
+        compartmentCount: d.compartments.length,
+        slots: d.compartments
+          .filter((c: any) => c.equipmentType != null)
+          .map((c: any) => ({
+            compartmentIndex: c.compartmentIndex,
+            equipmentType: c.equipmentType!,
+          })),
+      }))
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any)
     }
 
     // 使用服务器牌堆
@@ -218,12 +228,15 @@ if (isMP.value) {
 
 // ===== 战斗开始 =====
 onMounted(() => {
+  console.log('[BattleView] onMounted, phase=', gameStore.phase, 'isMP=', isMP.value)
   if (gameStore.phase !== 'battle') {
+    console.log('[BattleView] phase not battle, redirecting to /')
     router.push('/')
     return
   }
   if (isMP.value) {
     // 多人模式: 请求最新战斗状态
+    console.log('[BattleView] requesting battle init, mySlotIndex=', mySlotIndex.value)
     multiplayerClient.requestBattleInit()
     return
   }

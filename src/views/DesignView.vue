@@ -98,8 +98,10 @@ onMounted(() => {
     syncingFromRemote = false
   }))
   mpCleanups.push(multiplayerClient.onBattleInit((payload) => {
+    console.log('[DesignView] battle:init received, battleInitReceived=', battleInitReceived, 'phase=', gameStore.phase)
     if (battleInitReceived) return
     battleInitReceived = true
+    console.log('[DesignView] calling loadBattleAndGo, phase=', gameStore.phase)
     loadBattleAndGo(payload)
   }))
   // 请求当前设计状态 (解决挂载后无初始数据问题)
@@ -111,13 +113,24 @@ onUnmounted(() => {
 })
 
 function loadBattleAndGo(payload: any): void {
-  // 防止重复初始化 (BattleView 也会触发此回调)
-  if (battleInitReceived && gameStore.phase === 'battle') return
+  console.log('[DesignView] loadBattleAndGo entry, phase=', gameStore.phase, 'battleInitReceived=', battleInitReceived)
+  if (battleInitReceived && gameStore.phase === 'battle') { console.log('[DesignView] loadBattleAndGo SKIP (already battle)'); return }
   // 初始化所有舰船 (从所有阵营的设计)
+  // 注: 服务端发送 ShipDesignData 格式, 需转换为 ShipDesign 格式
   for (const [teamId, designs] of Object.entries(payload.ships)) {
     const rep = payload.players.find((p: any) => p.teamId === teamId)
     if (shipStore.ships.filter(s => s.ownerTeamId === teamId).length === 0) {
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
+      const shipDesigns = (designs as any[]).map(d => ({
+        name: d.name,
+        compartmentCount: d.compartments.length,
+        slots: d.compartments
+          .filter((c: any) => c.equipmentType != null)
+          .map((c: any) => ({
+            compartmentIndex: c.compartmentIndex,
+            equipmentType: c.equipmentType!,
+          })),
+      }))
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any)
     }
   }
   // 初始化队伍和玩家 (如果还没初始化)
@@ -150,7 +163,12 @@ function loadBattleAndGo(payload: any): void {
   }
   combatStore.log('战斗开始! 请选择出生点', 'system')
   gameStore.startBattlePhase()
-  router.push('/battle')
+  console.log('[DesignView] phase set to battle, navigating to /battle, phase=', gameStore.phase)
+  router.push('/battle').then(() => {
+    console.log('[DesignView] router.push /battle resolved')
+  }).catch((e: any) => {
+    console.error('[DesignView] router.push /battle FAILED:', e)
+  })
 }
 
 function mpSync(): void {

@@ -166,11 +166,12 @@ io.on('connection', (socket) => {
 
   socket.on('design:ready', () => {
     const slot = getMySlot(socket.id)
-    if (!slot) return
+    if (!slot) { console.log('[design:ready] no slot for', socket.id); return }
     const room = getRoom(slot.code)
-    if (!room || room.state.phase !== 'design') return
+    if (!room || room.state.phase !== 'design') { console.log('[design:ready] bad room/phase'); return }
     const teamId = room.state.slots[slot.slotIndex]?.teamId
-    if (!teamId) return
+    if (!teamId) { console.log('[design:ready] no teamId'); return }
+    console.log(`[design:ready] slot=${slot.slotIndex} team=${teamId} readyTeams=[${[...room.readyTeams]}]`)
     // 标记队伍为已准备
     room.readyTeams.add(teamId)
     // 同步更新所有槽位的 isReady
@@ -180,6 +181,7 @@ io.on('connection', (socket) => {
     room.state.readyTeams = [...room.readyTeams]
     io.to(slot.code).emit('room:state', room.state)
     broadcastDesignState(io, room, teamId)
+    console.log(`[design:ready] after add, readyTeams=[${[...room.readyTeams]}] checking allReady...`)
     checkAllReady(io, room, slot.code)
   })
 
@@ -406,15 +408,19 @@ function broadcastDesignState(io: Server, room: ReturnType<typeof getRoom>, team
 }
 
 function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: string) {
-  if (!room) return
+  if (!room) { console.log('[checkAllReady] no room'); return }
   // 找出所有有玩家的队伍
   const occupiedTeams = new Set<string>()
   for (const s of room.state.slots) {
     if (s.playerName) occupiedTeams.add(s.teamId)
   }
-  if (occupiedTeams.size === 0) return
+  const occArr = [...occupiedTeams]
+  const readyArr = [...room.readyTeams]
+  console.log(`[checkAllReady] room=${code} occupied=[${occArr}] ready=[${readyArr}]`)
+  if (occupiedTeams.size === 0) { console.log('[checkAllReady] no occupied teams'); return }
   // 所有队伍都准备就绪?
-  const allReady = [...occupiedTeams].every(tid => room.readyTeams.has(tid))
+  const allReady = occArr.every(tid => room.readyTeams.has(tid))
+  console.log(`[checkAllReady] allReady=${allReady}`)
   if (!allReady) return
 
   room.state.phase = 'battle'
@@ -490,9 +496,10 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
   room.lastBattleInit = initPayload
   room.roundNumber = 1
 
+  console.log(`[checkAllReady] EMITTING battle:init to room ${code} — ${players.length} players, ${turnOrder.length} slots`)
   io.to(code).emit('battle:init', initPayload)
   io.to(code).emit('room:state', room.state)
-  console.log(`[battle:init] room ${code} — ${players.length} players, ${turnOrder.length} turn slots`)
+  console.log(`[checkAllReady] battle:init EMITTED for room ${code}`)
 }
 
 const PORT = process.env.PORT || 3001

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -65,6 +65,7 @@ const selectedEquipment = ref<EquipmentType | null>(null)
 
 // ===== 多人模式 =====
 let syncingFromRemote = false
+let lastSentDesignJson = ''
 let battleInitReceived = false
 
 onMounted(() => {
@@ -72,7 +73,6 @@ onMounted(() => {
   multiplayerClient.onRoomState((r) => {
     mpSlots.value = r.slots || []
     mpReadyTeams.value = r.readyTeams || []
-    // 如果房间阶段变为 battle，处理 battle init
     if (r.phase === 'battle' && !battleInitReceived) {
       // battle:init 也会单独抵达，这里做兜底
     }
@@ -90,6 +90,11 @@ onMounted(() => {
     }))
     for (let i = 0; i < ships.value.length; i++) rebuildMultiComp(i)
     isTeamReady.value = d.isTeamReady || false
+    // 更新 lastSentDesignJson 防止回环
+    lastSentDesignJson = JSON.stringify(ships.value.map(s => ({
+      name: s.name,
+      compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
+    })))
     syncingFromRemote = false
   })
   // 监听 battle:init — 服务器通知所有玩家进入战斗
@@ -98,6 +103,14 @@ onMounted(() => {
     battleInitReceived = true
     loadBattleAndGo(payload)
   })
+  // 请求当前设计状态 (解决挂载后无初始数据问题)
+  multiplayerClient.requestDesignState()
+})
+
+onUnmounted(() => {
+  if (isMultiplayer.value) {
+    multiplayerClient.removeAllListeners()
+  }
 })
 
 function loadBattleAndGo(payload: any): void {
@@ -112,7 +125,7 @@ function loadBattleAndGo(payload: any): void {
   }
   // 初始化队伍和玩家 (如果还没初始化)
   if (gameStore.players.length === 0) {
-    gameStore.initTeams(payload.teams.map((t: any) => ({ name: t.id, color: t.color })))
+    gameStore.initTeams(payload.teams.map((t: any) => ({ id: t.id, name: t.name || t.id, color: t.color })))
     gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
   }
   // 使用服务器牌堆初始化 cardStore
@@ -140,6 +153,12 @@ function loadBattleAndGo(payload: any): void {
 
 function mpSync(): void {
   if (!isMultiplayer.value || isTeamReady.value || syncingFromRemote) return
+  const json = JSON.stringify(ships.value.map(s => ({
+    name: s.name,
+    compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
+  })))
+  if (json === lastSentDesignJson) return  // 无变化，防止从远程同步后再次发送
+  lastSentDesignJson = json
   multiplayerClient.sendDesignUpdate(ships.value.map(s => ({
     name: s.name,
     compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),

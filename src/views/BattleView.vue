@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
@@ -89,7 +89,7 @@ if (isMP.value) {
     }
     // 初始化队伍和玩家
     if (gameStore.players.length === 0) {
-      gameStore.initTeams(payload.teams.map((t: any) => ({ name: t.id, color: t.color })))
+      gameStore.initTeams(payload.teams.map((t: any) => ({ id: t.id, name: t.name || t.id, color: t.color })))
       gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
     }
     // 建立 slotIndex ↔ playerId 映射
@@ -208,6 +208,12 @@ onMounted(() => {
     return
   }
   startSpawnPhase()
+})
+
+onUnmounted(() => {
+  if (isMP.value) {
+    multiplayerClient.removeAllListeners()
+  }
 })
 
 function startSpawnPhase(): void {

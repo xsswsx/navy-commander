@@ -36,11 +36,22 @@ export class MultiplayerClient {
   discardCards(cardIds: string[]): void { this.socket?.emit('card:discard', { cardIds }) }
   discardDownTo(maxCards: number): void { this.socket?.emit('card:discardDownTo', { maxCards }) }
 
+  // 设计阶段
+  requestDesignState(): void { this.socket?.emit('design:requestState') }
+
   // ===== 监听 =====
   private on(event: string, cb: Cb): void {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set())
     this.listeners.get(event)!.add(cb)
     this.socket?.on(event, cb)
+  }
+
+  /** 移除所有已注册的 socket 监听器 (用于组件卸载时清理) */
+  removeAllListeners(): void {
+    for (const [event, cbs] of this.listeners) {
+      for (const cb of cbs) this.socket?.off(event, cb)
+    }
+    this.listeners.clear()
   }
 
   onRoomState(cb: (s: RoomState) => void): void { this.on('room:state', cb) }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onUnmounted } from 'vue'
 import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 import type { RoomState } from '@shared/protocol'
 import { TEAM_COLORS } from '@/game/constants'
@@ -45,7 +45,7 @@ function addSlot(ti: number): void {
 function removeSlot(ti: number, si: number): void { slotNames[ti].splice(si, 1) }
 
 function initConnection(): void {
-  multiplayerClient.disconnect()
+  // connect() 是幂等的 (已连接则跳过)，不会丢失现有 listener
   multiplayerClient.connect()
   multiplayerClient.onRoomState((r) => { room.value = r })
   multiplayerClient.onError((e) => ElMessage.error(e.message))
@@ -88,6 +88,10 @@ function getTeamColor(teamId: string): string {
 function isMySlot(slot: any): boolean { return slot.socketId === multiplayerClient.id }
 
 initConnection()
+
+onUnmounted(() => {
+  multiplayerClient.removeAllListeners()
+})
 </script>
 
 <template>

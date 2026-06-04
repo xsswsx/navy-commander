@@ -17,7 +17,7 @@ npm run build            # Type-check (vue-tsc) + production build
 
 There are no test scripts currently configured. The Vite dev server proxies `/socket.io` to the multiplayer server automatically.
 
-This project is configured with GitHub Actions. Use git commit commands on every update.
+This project is configured with GitHub Actions. Use git commands to push it to remote repo on every update.
 
 ## Architecture
 

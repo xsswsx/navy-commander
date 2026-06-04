@@ -92,9 +92,9 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
-  function initTeams(teamConfigs: { name: string; color: string }[]): void {
+  function initTeams(teamConfigs: { name: string; color: string; id?: string }[]): void {
     teams.value = teamConfigs.map((cfg, i) => ({
-      id: `team_${i}`,
+      id: cfg.id || `team_${i}`,
       name: cfg.name,
       color: cfg.color,
       playerIds: [],

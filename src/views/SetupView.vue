@@ -76,7 +76,8 @@ function onMultiplayerStartDesign(room: RoomState): void {
   gameStore.setMode('multiplayer')
   gameStore.setTotalCompartments(room.totalCompartments)
   const uniqueTeams = [...new Set(room.slots.map(s => s.teamId))]
-  gameStore.initTeams(uniqueTeams.map((name, i) => ({ name, color: TEAM_COLORS[i % TEAM_COLORS.length] })))
+  // 用 team name 同时作为 id，与服务端保持一致
+  gameStore.initTeams(uniqueTeams.map((name, i) => ({ id: name, name, color: TEAM_COLORS[i % TEAM_COLORS.length] })))
   const playerConfigs = room.slots.filter(s => s.playerName).map(s => ({ name: s.playerName!, teamId: s.teamId }))
   gameStore.initPlayers(playerConfigs)
   shipStore.resetShipStore()

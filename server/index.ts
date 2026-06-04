@@ -135,6 +135,19 @@ io.on('connection', (socket) => {
   })
 
   // ===================== 设计阶段 =====================
+  // 客户端进入设计页面时请求当前状态
+  socket.on('design:requestState', () => {
+    const slot = getMySlot(socket.id)
+    if (!slot) return
+    const room = getRoom(slot.code)
+    if (!room || room.state.phase !== 'design') return
+    // 发送完整房间状态
+    socket.emit('room:state', room.state)
+    // 发送本队设计状态
+    const teamId = room.state.slots[slot.slotIndex]?.teamId
+    if (teamId) broadcastDesignState(io, room, teamId)
+  })
+
   socket.on('design:update', (ships: ShipDesignData[]) => {
     const slot = getMySlot(socket.id)
     if (!slot) return

@@ -64,16 +64,26 @@ let replayingRemote = false
 /** 当前操作积累的战斗结果 (操作完成后一次性发送) */
 let pendingResults: import('@shared/protocol').CombatActionResult[] = []
 let mpPendingDrawPhase = false
+/** 追踪命令执行期间新增的战斗日志, 用于同步到远程客户端 */
+let preCommandLogLen = 0
+function markPreCommandLog(): void { preCommandLogLen = combatStore.combatLog.length }
 function flushPendingResults(logMsg?: string, logType?: string): void {
-  if (pendingResults.length === 0) return
+  // 收集执行期间新增的日志
+  const newEntries = combatStore.combatLog.slice(preCommandLogLen)
+  preCommandLogLen = combatStore.combatLog.length
+  if (pendingResults.length === 0 && newEntries.length === 0) return
   multiplayerClient.sendAction({
     type: 'playCard',
     senderSlotIndex: mySlotIndex.value,
     results: [...pendingResults],
     logMessage: logMsg,
     logType: logType,
-  })
+  } as any)
   pendingResults = []
+  // 同步详细战斗日志到所有客户端
+  for (const e of newEntries) {
+    multiplayerClient.sendBattleLog(e.message, e.type)
+  }
 }
 // slotIndex → player.id 映射 (因 players 数组可能不连续)
 const slotToPlayerId = ref<Record<number, string>>({})
@@ -247,7 +257,7 @@ if (isMP.value) {
   }))
 
   mpCleanups.push(multiplayerClient.onCardDrawn((d) => {
-    const pid = slotToPlayerId.value[mySlotIndex.value]
+    const pid = gameStore.currentPlayerId || slotToPlayerId.value[mySlotIndex.value]
     if (pid) {
       cardStore.playerHands[pid] = d.hand as any
     }
@@ -953,6 +963,9 @@ function executeTargetedCommand(
   // card 和 command count 在中继成功后扣除, 避免中继失败时白扣
   const isRelaySrc = !isRelay && ['command_room', 'command_center', 'integrated_command'].includes(eqType)
 
+  // 标记操作前日志位置, 用于后续同步
+  if (!isRelay && isMP.value && !replayingRemote) markPreCommandLog()
+
   if (!isRelaySrc) {
     combatStore.useCommand(comp.id)
   }
@@ -1297,6 +1310,8 @@ function getFullAirSuperiority(shipId: string, teamId: string): number {
 // ===== 回合结束 =====
 function handleEndTurn(): void {
   if (!mpCanAct()) { ElMessage.warning('等待你的回合...'); return }
+  // 追踪回合结束时的日志 (鱼雷伤害/效果到期等)
+  if (isMP.value && !replayingRemote) markPreCommandLog()
   const playerId = gameStore.currentPlayerId!
   const ship = gameStore.currentPlayer?.currentShipId
     ? shipStore.findShip(gameStore.currentPlayer.currentShipId) : null

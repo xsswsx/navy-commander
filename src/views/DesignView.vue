@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
 import { useCardStore } from '@/stores/card'
+import { useCombatStore } from '@/stores/combat'
+import { useUiStore } from '@/stores/ui'
 import { getAllEquipment, getEquipmentByCategory } from '@/game/equipment/registry'
 import { baseHp } from '@/game/constants'
 import type { EquipmentType, ShipDesign, DesignSlot } from '@/game/types'
@@ -14,9 +16,12 @@ const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
 const cardStore = useCardStore()
+const combatStore = useCombatStore()
+const uiStore = useUiStore()
 const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
-const isReady = ref(false)
+const isTeamReady = ref(false)  // 本队伍是否已准备 (多人模式)
 const mpSlots = ref<any[]>([])
+const mpReadyTeams = ref<string[]>([])
 
 const allEquipment = getAllEquipment()
 const combatEquipment = getEquipmentByCategory('combat')
@@ -60,10 +65,18 @@ const selectedEquipment = ref<EquipmentType | null>(null)
 
 // ===== 多人模式 =====
 let syncingFromRemote = false
+let battleInitReceived = false
 
 onMounted(() => {
   if (!isMultiplayer.value) return
-  multiplayerClient.onRoomState((r) => { mpSlots.value = r.slots || [] })
+  multiplayerClient.onRoomState((r) => {
+    mpSlots.value = r.slots || []
+    mpReadyTeams.value = r.readyTeams || []
+    // 如果房间阶段变为 battle，处理 battle init
+    if (r.phase === 'battle' && !battleInitReceived) {
+      // battle:init 也会单独抵达，这里做兜底
+    }
+  })
   multiplayerClient.onDesignState((d) => {
     syncingFromRemote = true
     ships.value = d.ships.map((s: any) => ({
@@ -76,12 +89,57 @@ onMounted(() => {
       })),
     }))
     for (let i = 0; i < ships.value.length; i++) rebuildMultiComp(i)
+    isTeamReady.value = d.isTeamReady || false
     syncingFromRemote = false
+  })
+  // 监听 battle:init — 服务器通知所有玩家进入战斗
+  multiplayerClient.onBattleInit((payload) => {
+    if (battleInitReceived) return
+    battleInitReceived = true
+    loadBattleAndGo(payload)
   })
 })
 
+function loadBattleAndGo(payload: any): void {
+  // 防止重复初始化 (BattleView 也会触发此回调)
+  if (battleInitReceived && gameStore.phase === 'battle') return
+  // 初始化所有舰船 (从所有阵营的设计)
+  for (const [teamId, designs] of Object.entries(payload.ships)) {
+    const rep = payload.players.find((p: any) => p.teamId === teamId)
+    if (shipStore.ships.filter(s => s.ownerTeamId === teamId).length === 0) {
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
+    }
+  }
+  // 初始化队伍和玩家 (如果还没初始化)
+  if (gameStore.players.length === 0) {
+    gameStore.initTeams(payload.teams.map((t: any) => ({ name: t.id, color: t.color })))
+    gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
+  }
+  // 使用服务器牌堆初始化 cardStore
+  cardStore.resetCardStore()
+  if (payload.drawPile && payload.drawPile.length > 0) {
+    // 直接设置服务端传来的牌堆和手牌
+    cardStore.drawPile = payload.drawPile
+    cardStore.discardPile = payload.discardPile || []
+    cardStore.playerHands = {}
+    for (const [si, hand] of Object.entries(payload.playerHands)) {
+      const slotIndex = Number(si)
+      const player = gameStore.players[slotIndex]
+      if (player) {
+        cardStore.playerHands[player.id] = hand as any[]
+      }
+    }
+  } else {
+    cardStore.initDeck()
+    cardStore.dealInitialHands(gameStore.players.map((p: any) => p.id))
+  }
+  combatStore.log('战斗开始! 请选择出生点', 'system')
+  gameStore.startBattlePhase()
+  router.push('/battle')
+}
+
 function mpSync(): void {
-  if (!isMultiplayer.value || isReady.value || syncingFromRemote) return
+  if (!isMultiplayer.value || isTeamReady.value || syncingFromRemote) return
   multiplayerClient.sendDesignUpdate(ships.value.map(s => ({
     name: s.name,
     compartments: s.compartments.map(c => ({ compartmentIndex: c.compartmentIndex, equipmentType: c.equipmentType })),
@@ -97,15 +155,15 @@ function mpReady(): void {
   const existing = shipStore.ships.filter(s => s.ownerTeamId === currentTeam.value!.id)
   if (existing.length === 0) confirmDesign()
   multiplayerClient.setReady()
-  isReady.value = true
+  isTeamReady.value = true
 }
 
 function mpCancelReady(): void {
   multiplayerClient.cancelReady()
-  isReady.value = false
+  isTeamReady.value = false
 }
 
-const designLocked = computed(() => isMultiplayer.value && isReady.value)
+const designLocked = computed(() => isMultiplayer.value && isTeamReady.value)
 
 function addShip(): void {
   if (designLocked.value) return
@@ -155,7 +213,6 @@ function removeCompartment(shipIndex: number, slotIndex: number): void {
   ship.compartments.splice(slotIndex, 1)
   ship.compartments.forEach((s, i) => {
     s.compartmentIndex = i
-    // 更新所有slaveOfSlot引用
   })
   // 修复引用
   for (const s of ship.compartments) {
@@ -350,7 +407,7 @@ function getEqTooltip(eq: ReturnType<typeof getEqDef>): string {
       lines.push('')
       lines.push('<b>【装填】</b>进入装填状态')
       lines.push('<b>【发射】</b>退出装填, 发射 <b>4颗</b> 鱼雷')
-      lines.push(`每颗 <b>1D12</b> 伤害, <b>全玩家回合</b>后到达`)
+      lines.push('每颗 <b>1D12</b> 伤害, <b>全玩家回合</b>后到达')
       lines.push('<b style="color:#f56c6c">被击毁时若装填中: 殉爆5</b>')
       break
     case 'small_hangar':
@@ -402,9 +459,9 @@ function getEqTooltip(eq: ReturnType<typeof getEqDef>): string {
     case 'smoke_generator':
       lines.push('')
       lines.push('<b>【快速发烟】</b>半玩家回合内, 本舱段与二相邻舱段不可被取为对象')
-      lines.push(`  (半回合 = ceil(存活玩家数/2) 回合)`)
+      lines.push('  (半回合 = ceil(存活玩家数/2) 回合)')
       lines.push('<b>【持续发烟】</b>全玩家回合内, 本舱段与相邻舱段不可被取为对象')
-      lines.push(`  (全回合 = 存活玩家数 回合)`)
+      lines.push('  (全回合 = 存活玩家数 回合)')
       break
     case 'afterburner':
       lines.push('')
@@ -444,7 +501,7 @@ interface Preset {
 }
 const USER_PRESETS_KEY = 'navy_commander_user_presets'
 
-// 官方预设 (不可删除) — 必须定义在 loadPresets() 之前
+// 官方预设 (不可删除)
 const OFFICIAL_PRESETS: Preset[] = [
   {
     id: 'official_balanced', name: '均衡战舰 (5舱段)', isOfficial: true,
@@ -734,9 +791,8 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
             <div v-if="isMultiplayer && mpSlots.length" class="mp-lights">
               <span v-for="tid in [...new Set(mpSlots.map((s:any)=>s.teamId))]" :key="tid" class="mp-light-group">
                 <span style="font-size:11px;color:#6a8aaa">{{ tid }}</span>
-                <span v-for="s in mpSlots.filter((s:any)=>s.teamId===tid)" :key="s.index"
-                  class="mp-dot" :class="{ on: s.isReady }"
-                  :title="(s.playerName||'空')+(s.isReady?' ✓':'')">●</span>
+                <span class="mp-dot" :class="{ on: mpReadyTeams.includes(tid) }"
+                  :title="`${tid} ${mpReadyTeams.includes(tid) ? '✓ 已准备' : '未准备'}`">●</span>
               </span>
             </div>
           </div>
@@ -804,8 +860,8 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 
         <div v-if="ships.length > 0" class="design-footer">
           <template v-if="isMultiplayer">
-            <el-tag v-if="isReady" type="success" size="large" style="margin-right:8px">已准备</el-tag>
-            <el-button v-if="isReady" type="warning" @click="mpCancelReady">取消准备</el-button>
+            <el-tag v-if="isTeamReady" type="success" size="large" style="margin-right:8px">队伍已准备</el-tag>
+            <el-button v-if="isTeamReady" type="warning" @click="mpCancelReady">取消准备</el-button>
             <el-button v-else type="primary" size="large" @click="mpReady">准备就绪</el-button>
           </template>
           <template v-else>
@@ -1111,12 +1167,12 @@ function getSlotEquipmentName(shipIdx: number, slot: DesignCompartment): string 
 .empty-hint {
   text-align: center;
   padding: 80px 0;
-  color: #4a6a8a;
+  color: #4a8a8a;
   font-size: 16px;
 }
 
 .mp-lights { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
-.mp-light-group { display: flex; align-items: center; gap: 2px; }
+.mp-light-group { display: flex; align-items: center; gap: 4px; }
 .mp-dot { font-size: 14px; color: #2a3a5f; transition: color 0.3s; }
 .mp-dot.on { color: #67c23a; text-shadow: 0 0 6px rgba(103,194,58,0.5); }
 </style>

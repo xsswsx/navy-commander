@@ -5,7 +5,7 @@ import type { RoomState } from '@shared/protocol'
 import { TEAM_COLORS } from '@/game/constants'
 import { ElMessage } from 'element-plus'
 
-const emit = defineEmits<{ 'start-design': [room: RoomState]; 'back': [] }>()
+const emit = defineEmits<{ 'start-design': [room: RoomState]; 'start-battle': [room: RoomState]; 'back': [] }>()
 
 const room = ref<RoomState | null>(null)
 const playerId = ref(localStorage.getItem('mp_playerId') || '')
@@ -27,10 +27,12 @@ function initTeams(): void {
 }
 initTeams()
 
-// 监听房间阶段变化 — 所有客户端收到 phase='design' 时自动进入设计
+// 监听房间阶段变化
 watch(() => room.value?.phase, (phase) => {
   if (phase === 'design' && room.value) {
     emit('start-design', room.value)
+  } else if (phase === 'battle' && room.value) {
+    emit('start-battle', room.value)
   }
 })
 
@@ -70,7 +72,7 @@ function joinRoom(): void {
 
 function leaveRoom(): void { multiplayerClient.leaveSlot(); room.value = null }
 
-function joinSlot(idx: number): void { multiplayerClient.joinSlot(idx) }
+function joinSlot(idx: number): void { multiplayerClient.joinSlot(idx, playerId.value.trim()) }
 function leaveSlot(): void { multiplayerClient.leaveSlot() }
 function startGame(): void { multiplayerClient.startGame() }
 

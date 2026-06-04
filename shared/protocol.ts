@@ -1,3 +1,12 @@
+// ==================== 通用卡牌类型 ====================
+
+export type CardType = 'move' | 'command' | 'action' | 'coffee' | 'scheme'
+
+export interface CardData {
+  id: string
+  type: CardType
+}
+
 // ==================== 服务端状态类型 ====================
 
 export interface SlotState {
@@ -15,6 +24,7 @@ export interface RoomState {
   phase: 'lobby' | 'design' | 'battle'
   teamCount: number
   totalCompartments: number
+  readyTeams?: string[]  // 已准备的队伍ID列表
 }
 
 // ==================== 客户端→服务端事件 ====================
@@ -44,6 +54,9 @@ export interface BattleAction {
   shipId?: string
   commandId?: string
   senderSlotIndex?: number
+  /** 战斗日志消息 */
+  logMessage?: string
+  logType?: string
 }
 
 // ==================== BattleInit 全量数据 ====================
@@ -53,7 +66,9 @@ export interface BattleInitPayload {
   players: { name: string; teamId: string; slotIndex: number }[]
   teams: { id: string; name: string; color: string }[]
   turnOrder: number[]               // slotIndex 顺序
-  playerHands: Record<number, any[]> // slotIndex → Card[]
+  playerHands: Record<number, CardData[]> // slotIndex → Card[]
+  drawPile: CardData[]              // 服务器洗好的抽牌堆
+  discardPile: CardData[]           // 弃牌堆
 }
 
 // ==================== 工具 ====================
@@ -63,4 +78,49 @@ export function generateRoomCode(): string {
   let code = ''
   for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)]
   return code
+}
+
+/** 构建一副完整的116张牌堆 */
+export function buildDeckCards(): CardData[] {
+  const cards: CardData[] = []
+  let id = 0
+  const add = (type: CardType, count: number) => {
+    for (let i = 0; i < count; i++) cards.push({ id: `deck_${++id}`, type })
+  }
+  add('move', 40)
+  add('command', 40)
+  add('action', 20)
+  add('coffee', 8)
+  add('scheme', 8)
+  return cards
+}
+
+/** Fisher-Yates 洗牌 */
+export function shuffleCards<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+/** 从牌堆抽牌，自动洗入弃牌堆 */
+export function drawFromDeck(
+  drawPile: CardData[],
+  discardPile: CardData[],
+  count: number
+): { drawn: CardData[]; newDraw: CardData[]; newDiscard: CardData[] } {
+  let d = [...drawPile]
+  let disc = [...discardPile]
+  const drawn: CardData[] = []
+  for (let i = 0; i < count; i++) {
+    if (d.length === 0) {
+      if (disc.length === 0) break
+      d = shuffleCards(disc)
+      disc = []
+    }
+    drawn.push(d.pop()!)
+  }
+  return { drawn, newDraw: d, newDiscard: disc }
 }

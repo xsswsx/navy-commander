@@ -9,6 +9,7 @@ import { useUiStore } from '@/stores/ui'
 import { getEquipment } from '@/game/equipment/registry'
 import { rollDice, rollMultiple } from '@/game/dice'
 import type { Compartment } from '@/game/types'
+import type { BattleAction, BattleInitPayload } from '@shared/protocol'
 import GameBoard from '@/components/battle/GameBoard.vue'
 import PlayerHand from '@/components/battle/PlayerHand.vue'
 import ActionBar from '@/components/battle/ActionBar.vue'
@@ -28,6 +29,7 @@ const uiStore = useUiStore()
 const isMP = computed(() => gameStore.mode === 'multiplayer')
 const mySlotIndex = ref(-1)
 const currentTurnSlot = ref(-1)
+const mpRoundNumber = ref(1)
 
 // 多人模式权限
 function mpCanAct(): boolean {
@@ -45,54 +47,167 @@ const commandDialogOptions = ref<{ id: string; name: string }[]>([])
 const spawnIndex = ref(0)
 const myTeamId = computed(() => {
   if (isMP.value && mySlotIndex.value >= 0) {
-    const p = gameStore.players[mySlotIndex.value]
+    const p = getPlayerBySlot(mySlotIndex.value)
     return p?.teamId ?? ''
   }
   return gameStore.currentPlayer?.teamId ?? ''
 })
 
-// ===== 多人模式: 提前注册 battle:init 监听 (在 onMounted 之前) =====
-function loadBattleInit(payload: any): void {
-  for (const [teamId, ships] of Object.entries(payload.ships)) {
-    const rep = payload.players.find((p:any) => p.teamId === teamId)
-    shipStore.finalizeDesign(rep?.name ?? '', teamId, ships as any)
-  }
-  if (gameStore.players.length === 0) {
-    gameStore.initTeams(payload.teams.map((t:any) => ({ name: t.id, color: t.color })))
-    gameStore.initPlayers(payload.players.map((p:any) => ({ name: p.name, teamId: p.teamId })))
-  }
-  // 通过 playerName 匹配找到本客户端槽位
-  const mySlot = payload.players.find((p:any) => p.slotIndex >= 0)
-  mySlotIndex.value = mySlot?.slotIndex ?? 0
-  if (Object.keys(payload.playerHands).length === 0) {
-    cardStore.dealInitialHands(gameStore.players.map((p:any) => p.id))
-  }
-  combatStore.log('战斗开始! 请选择出生点', 'system')
-  const myPlayer = gameStore.players[mySlotIndex.value]
-  if (myPlayer && !myPlayer.currentShipId) {
-    const myShips = shipStore.ships.filter((s:any) => s.ownerTeamId === myPlayer.teamId)
-    if (myShips.length > 0) {
-      spawnPlayerName.value = myPlayer.name
-      showSpawnDialog.value = true
-    }
-  }
+// 防御: 防止远程操作触发本地操作再发送回服务器
+let replayingRemote = false
+// slotIndex → player.id 映射 (因 players 数组可能不连续)
+const slotToPlayerId = ref<Record<number, string>>({})
+const playerIdToSlot = ref<Record<string, number>>({})
+
+function getPlayerBySlot(slotIndex: number) {
+  const pid = slotToPlayerId.value[slotIndex]
+  return pid ? gameStore.players.find(p => p.id === pid) ?? null : null
 }
 
+// ===== 多人模式: 注册事件监听 (在组件 setup 阶段) =====
 if (isMP.value) {
-  multiplayerClient.onBattleInit(loadBattleInit)
-  multiplayerClient.onBattleTurn((t) => { currentTurnSlot.value = t.playerSlotIndex })
-  multiplayerClient.onBattleAction((_a) => { /* 远程操作 */ })
+  multiplayerClient.onBattleInit((payload: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => {
+    // 如果已经初始化过 (可能由 DesignView 预先初始化)，跳过
+    if (gameStore.players.length > 0 && shipStore.ships.length > 0) {
+      // 只更新回合/出生点状态
+      if (payload.currentTurnSlot !== undefined) currentTurnSlot.value = payload.currentTurnSlot
+      if (payload.roundNumber) mpRoundNumber.value = payload.roundNumber
+      // 更新手牌 (服务端为最新权威来源)
+      if (payload.playerHands) {
+        cardStore.playerHands = {}
+        for (const [si, hand] of Object.entries(payload.playerHands)) {
+          const pid = slotToPlayerId.value[Number(si)]
+          if (pid) cardStore.playerHands[pid] = hand as any
+        }
+      }
+      return
+    }
+    // 初始化舰船
+    for (const [teamId, designs] of Object.entries(payload.ships)) {
+      const rep = payload.players.find((p: any) => p.teamId === teamId)
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, designs as any)
+    }
+    // 初始化队伍和玩家
+    if (gameStore.players.length === 0) {
+      gameStore.initTeams(payload.teams.map((t: any) => ({ name: t.id, color: t.color })))
+      gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
+    }
+    // 建立 slotIndex ↔ playerId 映射
+    const slotMap: Record<number, string> = {}
+    const pidMap: Record<string, number> = {}
+    for (let i = 0; i < payload.players.length; i++) {
+      const player = gameStore.players[i]
+      if (player) {
+        slotMap[payload.players[i].slotIndex] = player.id
+        pidMap[player.id] = payload.players[i].slotIndex
+      }
+    }
+    slotToPlayerId.value = slotMap
+    playerIdToSlot.value = pidMap
+
+    // 尝试通过 playerName 匹配本客户端槽位
+    const storedName = localStorage.getItem('mp_playerId') || ''
+    for (let i = 0; i < payload.players.length; i++) {
+      if (payload.players[i].name === storedName) {
+        mySlotIndex.value = payload.players[i].slotIndex
+        break
+      }
+    }
+
+    // 使用服务器牌堆
+    cardStore.resetCardStore()
+    if (payload.drawPile && payload.drawPile.length > 0) {
+      cardStore.drawPile = payload.drawPile as any
+      cardStore.discardPile = (payload.discardPile || []) as any
+      cardStore.playerHands = {}
+      for (const [si, hand] of Object.entries(payload.playerHands)) {
+        const pid = slotToPlayerId.value[Number(si)]
+        if (pid) {
+          cardStore.playerHands[pid] = hand as any
+        }
+      }
+    } else {
+      cardStore.initDeck()
+      cardStore.dealInitialHands(gameStore.players.map(p => p.id))
+    }
+
+    // 回复联机状态
+    if (payload.currentTurnSlot !== undefined) currentTurnSlot.value = payload.currentTurnSlot
+    if (payload.roundNumber) mpRoundNumber.value = payload.roundNumber
+
+    // 重放战斗日志
+    if (payload.battleLog) {
+      for (const entry of payload.battleLog) {
+        combatStore.log(entry.message, entry.type as any)
+      }
+    }
+
+    combatStore.log('战斗开始! 请选择出生点', 'system')
+
+    // 检查是否已选择出生点
+    const alreadySpawned = payload.spawns?.find((s: any) => s.slotIndex === mySlotIndex.value)
+    if (!alreadySpawned) {
+      const myP = getPlayerBySlot(mySlotIndex.value)
+      if (myP && !myP.currentShipId) {
+        spawnPlayerName.value = myP.name
+        showSpawnDialog.value = true
+      }
+    }
+  })
+
+  multiplayerClient.onBattleTurn((t) => {
+    currentTurnSlot.value = t.playerSlotIndex
+    if (t.roundNumber) mpRoundNumber.value = t.roundNumber
+    // 对齐 gameStore 的回合索引
+    const pid = slotToPlayerId.value[t.playerSlotIndex]
+    if (pid) {
+      const idx = gameStore.turnOrder.indexOf(pid)
+      if (idx >= 0) {
+        gameStore.currentTurnIndex = idx
+      }
+    }
+    const player = getPlayerBySlot(t.playerSlotIndex)
+    if (player) {
+      combatStore.log(`--- ${player.name} 的回合 ---`, 'system')
+    }
+    // 如果是自己的回合，触发抽牌阶段
+    if (t.playerSlotIndex === mySlotIndex.value) {
+      gameStore.currentTurnPhase = 'draw'
+    }
+  })
+
+  multiplayerClient.onBattleAction((action: BattleAction) => {
+    // 忽略自己的操作 (本地已执行)
+    if (action.senderSlotIndex === mySlotIndex.value) return
+    replayingRemote = true
+    handleRemoteAction(action)
+    replayingRemote = false
+  })
+
+  multiplayerClient.onBattleLog((entry) => {
+    combatStore.log(entry.message, entry.type as any)
+  })
+
+  multiplayerClient.onCardDrawn((d) => {
+    const pid = slotToPlayerId.value[mySlotIndex.value]
+    if (pid) {
+      cardStore.playerHands[pid] = d.hand as any
+    }
+  })
 }
 
 // ===== 战斗开始 =====
 onMounted(() => {
-  if (gameStore.phase === 'battle') {
-    if (isMP.value) {
-      multiplayerClient.requestBattleInit()
-      return
-    }
-    startSpawnPhase()
+  if (gameStore.phase !== 'battle') {
+    router.push('/')
+    return
   }
+  if (isMP.value) {
+    // 多人模式: 请求最新战斗状态
+    multiplayerClient.requestBattleInit()
+    return
+  }
+  startSpawnPhase()
 })
 
 function startSpawnPhase(): void {
@@ -103,7 +218,6 @@ function startSpawnPhase(): void {
 function showSpawnForCurrent(): void {
   const playerIds = gameStore.turnOrder
   if (spawnIndex.value >= playerIds.length) {
-    // 所有玩家出生完毕, 开始第一位玩家的回合
     startDrawPhase()
     return
   }
@@ -122,7 +236,6 @@ function showSpawnForCurrent(): void {
   }
   spawnPlayerName.value = player.name
   if (spawnIndex.value > 0) {
-    // 非第一个玩家需要过渡遮罩
     transitionToName.value = player.name
     transitionVisible.value = true
   } else {
@@ -132,21 +245,17 @@ function showSpawnForCurrent(): void {
 
 function onTransitionConfirm(): void {
   transitionVisible.value = false
-  // 区分出生阶段与正常回合阶段
   const playerIds = gameStore.turnOrder
   if (spawnIndex.value < playerIds.length && spawnIndex.value > 0) {
-    // 还在出生阶段
     showSpawnDialog.value = true
   } else if (gameStore.currentTurnPhase === 'draw') {
-    // 正常回合过渡
     startDrawPhase()
   }
 }
 
 function handleSpawnSelect(compartmentId: string): void {
-  // 多人模式: 只为自己选出生点
   if (isMP.value) {
-    const myPlayer = gameStore.players[mySlotIndex.value]
+    const myPlayer = getPlayerBySlot(mySlotIndex.value)
     if (!myPlayer) return
     const ship = shipStore.getShipByCompartment(compartmentId)
     if (!ship) return
@@ -156,8 +265,7 @@ function handleSpawnSelect(compartmentId: string): void {
     myPlayer.currentCompartmentIndex = comp.position
     combatStore.log(`${myPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
     showSpawnDialog.value = false
-    multiplayerClient.sendSpawn(compartmentId)
-    startDrawPhase()
+    multiplayerClient.sendSpawn(compartmentId, ship.id)
     return
   }
   // 热座: 按顺序选出生点
@@ -177,9 +285,43 @@ function handleSpawnSelect(compartmentId: string): void {
   showSpawnForCurrent()
 }
 
-// ===== 回合切换 (出生完毕后) =====
+// ===== 远程操作回放 =====
+function handleRemoteAction(action: BattleAction): void {
+  const senderSlot = action.senderSlotIndex ?? -1
+  const senderPlayer = gameStore.players[senderSlot]
+  if (!senderPlayer) return
+
+  if (action.logMessage) {
+    combatStore.log(action.logMessage, (action.logType || 'info') as any)
+  }
+
+  switch (action.type) {
+    case 'selectSpawn': {
+      if (action.compartmentId) {
+        const ship = shipStore.getShipByCompartment(action.compartmentId)
+        const comp = ship?.compartments.find(c => c.id === action.compartmentId)
+        if (ship && comp) {
+          senderPlayer.currentShipId = ship.id
+          senderPlayer.currentCompartmentIndex = comp.position
+          combatStore.log(`${senderPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
+        }
+      }
+      break
+    }
+    case 'endTurn': {
+      combatStore.log(`${senderPlayer.name} 结束回合`, 'system')
+      combatStore.tickEffects()
+      combatStore.tickFighterTurns()
+      combatStore.resetPerTurnCounters()
+      break
+    }
+    // 其他操作类型由各自的 handler 经过服务器 relay 后处理
+  }
+}
+
+// ===== 回合切换 =====
 watch(() => gameStore.currentPlayerId, (newId, oldId) => {
-  if (oldId && newId && gameStore.phase === 'battle') {
+  if (oldId && newId && gameStore.phase === 'battle' && !isMP.value) {
     const player = gameStore.players.find(p => p.id === newId)
     if (player) {
       transitionToName.value = player.name
@@ -195,8 +337,31 @@ watch(() => gameStore.currentTurnPhase, (phase) => {
   }
 })
 
-// ===== 抽牌 (自动完成, 立即进入行动阶段) =====
+// ===== 抽牌 =====
 function startDrawPhase(): void {
+  if (isMP.value) {
+    // 多人模式: 从服务器抽牌 (批量)
+    const playerId = gameStore.currentPlayerId!
+    const player = gameStore.currentPlayer
+    if (!player || !player.currentShipId) return
+    const ship = shipStore.findShip(player.currentShipId)
+    if (!ship) return
+    const comp = player.currentCompartmentIndex != null ? ship.compartments[player.currentCompartmentIndex] : null
+    let drawAmount = comp ? shipStore.getDrawValue(comp) : 1
+    const compensation = gameStore.getFirstRoundCompensation(playerId)
+    if (compensation > 0) {
+      drawAmount += compensation
+      combatStore.log(`${player.name} 第一轮后攻补偿 +${compensation}张`, 'system')
+    }
+    if (drawAmount > 0) multiplayerClient.drawCards(drawAmount)
+    combatStore.log(`${player.name} 在 ${comp ? getEquipment(comp.equipmentType!)?.name ?? '空舱段' : '?'} 抽 ${drawAmount} 张`, 'system')
+    combatStore.resetPerTurnCounters()
+    uiStore.resetBattleState()
+    combatStore.removeFightersByPlayer(playerId)
+    gameStore.advancePhase()
+    return
+  }
+
   const playerId = gameStore.currentPlayerId!
   const player = gameStore.currentPlayer
   if (!player || !player.currentShipId) return
@@ -210,13 +375,11 @@ function startDrawPhase(): void {
   combatStore.log(`${player.name} 在 ${comp ? getEquipment(comp.equipmentType!)?.name ?? '空舱段' : '?'} 抽 ${drawAmount} 张`, 'system')
   combatStore.resetPerTurnCounters()
   uiStore.resetBattleState()
-  // 移除本玩家派出的战斗机 (自己的回合再次开始时失效)
   combatStore.removeFightersByPlayer(playerId)
-  // 抽牌完成, 立即进入行动阶段
   gameStore.advancePhase()
 }
 
-// ===== 卡牌点击 → state machine =====
+// ===== 卡牌点击 =====
 function handlePlayCard(cardId: string): void {
   if (!mpCanAct()) { ElMessage.warning('等待你的回合...'); return }
   if (uiStore.battleState !== 'idle') {
@@ -238,13 +401,11 @@ function handlePlayCard(cardId: string): void {
       uiStore.selectedCardIds = [cardId]
       uiStore.pendingAction = 'command'
       uiStore.isFreeAction = false
-      // 直接对当前舱段指挥
       commandCurrentCompartment()
       break
     case 'action':
       uiStore.selectedCardIds = [cardId]
       uiStore.isFreeAction = false
-      // 万能牌: 让玩家选择移动或指挥
       ElMessageBox({
         title: '万能牌 (行动)',
         message: '选择使用方式：',
@@ -253,12 +414,10 @@ function handlePlayCard(cardId: string): void {
         cancelButtonText: '指挥',
         type: 'info',
       }).then(() => {
-        // 移动
         uiStore.pendingAction = 'move'
         uiStore.enterMovingState()
         ElMessage.info('选择目标舱段 (手牌移动: 1格)')
       }).catch(() => {
-        // 指挥
         uiStore.pendingAction = 'command'
         commandCurrentCompartment()
       })
@@ -267,6 +426,11 @@ function handlePlayCard(cardId: string): void {
       cardStore.removeCardFromHand(playerId, cardId)
       cardStore.playerDrawCards(playerId, 2)
       combatStore.log(`${gameStore.currentPlayer!.name} 使用咖啡，抽2张牌`, 'system')
+      if (isMP.value) {
+        multiplayerClient.discardCards([cardId])
+        multiplayerClient.drawCards(2)
+        multiplayerClient.sendBattleLog(`${gameStore.currentPlayer!.name} 使用咖啡，抽2张牌`, 'system')
+      }
       break
     case 'scheme':
       handleSchemeCard(cardId)
@@ -283,6 +447,10 @@ function handleSchemeCard(cardId: string): void {
     cardStore.playerDrawCards(tp.id, 1)
   }
   combatStore.log(`${player.name} 使用谋划，己方全员抽1张牌`, 'system')
+  if (isMP.value) {
+    multiplayerClient.discardCards([cardId])
+    multiplayerClient.sendBattleLog(`${player.name} 使用谋划，己方全员抽1张牌`, 'system')
+  }
 }
 
 // ===== 自由行动 =====
@@ -304,7 +472,6 @@ function handleFreeCommand(): void {
   uiStore.clearCardSelection()
   uiStore.pendingAction = 'command'
   uiStore.isFreeAction = true
-  // 直接对当前舱段指挥
   commandCurrentCompartment()
 }
 
@@ -315,7 +482,6 @@ function handleFreePass(): void {
   ElMessage.info('传递功能待实现')
 }
 
-/** 直接对当前所在舱段发起指挥 */
 function commandCurrentCompartment(): void {
   const playerId = gameStore.currentPlayerId!
   const player = gameStore.currentPlayer!
@@ -334,7 +500,7 @@ function commandCurrentCompartment(): void {
   handleCommandCompartment(comp.id)
 }
 
-// ===== 舱段点击 → 根据状态分派 =====
+// ===== 舱段点击 =====
 function handleCompartmentClick(compartmentId: string): void {
   const state = uiStore.battleState
   if (state === 'idle') return
@@ -350,7 +516,6 @@ function handleCompartmentClick(compartmentId: string): void {
   }
 }
 
-// ===== 舰船点击 =====
 function handleShipClick(shipId: string): void {
   if (uiStore.battleState === 'targeting_ship') {
     resolveTargetShip(shipId)
@@ -385,8 +550,13 @@ function resolveMove(compartmentId: string): void {
 
   if (uiStore.selectedCardIds.length > 0) {
     cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
+    if (isMP.value) multiplayerClient.discardCards(uiStore.selectedCardIds)
   }
   if (uiStore.isFreeAction) gameStore.useFreeAction()
+
+  if (isMP.value) {
+    multiplayerClient.sendBattleLog(`${player.name} 移动到舱段${targetComp.position + 1}`, 'system')
+  }
 
   uiStore.resetBattleState()
   ElMessage.success(`已移动到舱段${targetComp.position + 1}`)
@@ -404,14 +574,12 @@ function handleCommandCompartment(compartmentId: string): void {
   let comp = ship.compartments.find(c => c.id === compartmentId)
   if (!comp) { ElMessage.warning('无效的舱段'); return }
 
-  // 如果是从属舱段，重定向到主舱段
   if (comp.multiCompRootId) {
     const master = ship.compartments.find(c => c.id === comp!.multiCompRootId)
     if (!master || !master.equipmentType) { ElMessage.warning('无效的军备'); return }
     comp = master
   }
 
-  // 多舱段军备: 检查是否有从属被击毁
   if (comp.multiCompSlaveIds.length > 0) {
     const anySlaveDestroyed = comp.multiCompSlaveIds.some(sid => {
       const s = ship.compartments.find(c => c.id === sid)
@@ -434,14 +602,12 @@ function handleCommandCompartment(compartmentId: string): void {
     return
   }
 
-  // 检查人物位置 (支持多舱段军备的任意舱段)
   const isRemoteCmd = ['command_room', 'command_center', 'integrated_command'].includes(comp.equipmentType)
   if (!isRemoteCmd && !isPlayerOnCompartment(player, comp, ship)) {
     ElMessage.warning('必须身处该舱段才能指挥')
     return
   }
 
-  // 检查每回合指挥次数
   if (eqDef.commandsPerTurn > 0) {
     const used = combatStore.getCommandsUsed(compartmentId)
     if (used >= eqDef.commandsPerTurn) {
@@ -450,7 +616,6 @@ function handleCommandCompartment(compartmentId: string): void {
     }
   }
 
-  // 机库出击架次
   if (eqDef.tags.includes('hangar')) {
     const hangarShip = shipStore.getShipByCompartment(compartmentId)
     if (hangarShip) {
@@ -468,17 +633,14 @@ function handleCommandCompartment(compartmentId: string): void {
   uiStore.enterCommandingState(compartmentId)
   commandDialogComp.value = comp
 
-  // 弹出指挥选项
   if (eqDef.commands.length > 1) {
     commandDialogOptions.value = eqDef.commands.map(c => ({ id: c.id, name: c.name }))
     showCommandDialog.value = true
   } else {
-    // 单个指挥直接进入目标选择
     handleCommandOptionSelected(eqDef.commands[0].id)
   }
 }
 
-// ===== 指挥选项选定 → 进入目标选择 =====
 function handleCommandOptionSelected(optionId: string): void {
   showCommandDialog.value = false
   const comp = commandDialogComp.value
@@ -491,19 +653,16 @@ function handleCommandOptionSelected(optionId: string): void {
   uiStore.pendingCommandId = optionId
   uiStore.selectedSourceCompartmentId = comp.id
 
-  // 不需要目标的指挥
   if (cmd.targeting.scope === 'self') {
     executeSelfTargetCommand(comp, optionId)
     return
   }
 
-  // 需要选择舱段
   if (cmd.targeting.scope === 'enemy-compartment' || cmd.targeting.scope === 'own-compartment') {
     enterCompartmentTargeting(comp, optionId, cmd.targeting.scope)
     return
   }
 
-  // 需要选择舰船
   if (cmd.targeting.scope === 'enemy-ship' || cmd.targeting.scope === 'own-ship' || cmd.targeting.scope === 'any-compartment') {
     enterShipTargeting(comp, optionId, cmd.targeting.scope)
     return
@@ -521,7 +680,6 @@ function enterCompartmentTargeting(comp: Compartment, cmdId: string, scope: stri
       validIds.push(...living.map(c => c.id))
     }
   } else if (scope === 'own-compartment') {
-    // 指挥室/指挥中心: 仅限同一舰船
     const sourceShip = shipStore.getShipByCompartment(comp.id)
     if (sourceShip) {
       const living = shipStore.getLivingCompartments(sourceShip.id)
@@ -552,7 +710,6 @@ function enterShipTargeting(comp: Compartment, cmdId: string, scope: string): vo
       .filter(s => s.ownerTeamId === player.teamId && shipStore.getLivingCompartments(s.id).length > 0)
       .map(s => s.id)
   } else {
-    // any-compartment → ship-level targeting
     validIds = shipStore.ships
       .filter(s => shipStore.getLivingCompartments(s.id).length > 0)
       .map(s => s.id)
@@ -568,7 +725,6 @@ function enterShipTargeting(comp: Compartment, cmdId: string, scope: string): vo
   ElMessage.info(`请选择目标舰船 (${validIds.length}艘可选)`)
 }
 
-// ===== 目标选定 → 执行 =====
 function resolveTargetCompartment(targetCompId: string): void {
   const sourceCompId = uiStore.selectedSourceCompartmentId
   const cmdId = uiStore.pendingCommandId
@@ -582,7 +738,6 @@ function resolveTargetCompartment(targetCompId: string): void {
     return
   }
 
-  // 暂存目标 → 执行
   commandDialogComp.value = comp
   executeTargetedCommand(comp, cmdId, targetCompId)
   uiStore.resetBattleState()
@@ -611,7 +766,6 @@ function cancelTargeting(): void {
   ElMessage.info('已取消')
 }
 
-// ===== 执行军备效果 =====
 function executeSelfTargetCommand(comp: Compartment, cmdId: string): void {
   executeTargetedCommand(comp, cmdId, comp.id)
   uiStore.resetBattleState()
@@ -631,13 +785,12 @@ function executeTargetedCommand(
   const eqType = comp.equipmentType
   const eqDef = getEquipment(eqType)
 
-  // 扣指挥次数
   combatStore.useCommand(comp.id)
 
-  // 扣手牌或自由行动 (仅在非转发时消耗)
   if (!isRelay) {
     if (uiStore.selectedCardIds.length > 0) {
       cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
+      if (isMP.value && !replayingRemote) multiplayerClient.discardCards(uiStore.selectedCardIds)
     }
     if (uiStore.isFreeAction) gameStore.useFreeAction()
   }
@@ -652,7 +805,6 @@ function executeTargetedCommand(
       const d8 = rollDice('D8')
 
       if (isBlind) {
-        // 盲射: 3-6命中随机舱段
         if (d8 < 3 || d8 > 6) {
           combatStore.log(`[盲射 D8=${d8}] 未命中!`, 'info')
           return
@@ -663,7 +815,6 @@ function executeTargetedCommand(
         if (living.length === 0) return
         hitCompId = living[Math.floor(Math.random() * living.length)].id
       } else {
-        // 射击: 命中表
         const targetShip = shipStore.getShipByCompartment(targetId)
         const hasAB = targetShip?.compartments.some(c => c.equipmentType === 'afterburner' && !c.isDestroyed)
         combatStore.log(`[射击 D8=${d8}] ${hasAB ? '目标有加力引擎' : ''}`, 'system')
@@ -720,7 +871,7 @@ function executeTargetedCommand(
       const tgtShipId = targetId
       if (cmdId.includes('fighter')) {
         combatStore.addFighterToken(tgtShipId, player.teamId, comp.id, playerId, gameStore.alivePlayerCount)
-        combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2 (${gameStore.alivePlayerCount}T后失效)`, 'effect')
+        combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2`, 'effect')
       } else if (cmdId.includes('bomber')) {
         const nfa = getFullAirSuperiority(tgtShipId, player.teamId)
         const d12 = rollDice('D12')
@@ -752,12 +903,12 @@ function executeTargetedCommand(
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         shipStore.healCompartment(comp.id, 2)
         for (const ac of adj) shipStore.healCompartment(ac.id, 2)
-        combatStore.log(`综合修复 HP+2`, 'effect')
+        combatStore.log('综合修复 HP+2', 'effect')
       } else {
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         if (adj.length > 0) {
           shipStore.healCompartment(adj[0].id, 8)
-          combatStore.log(`快速抢修 HP+8`, 'effect')
+          combatStore.log('快速抢修 HP+8', 'effect')
         }
       }
       break
@@ -771,7 +922,6 @@ function executeTargetedCommand(
         const tgtEq = getEquipment(tgtComp.equipmentType)
         if (tgtEq.commands.length > 0) {
           combatStore.log(`${player.name} 发令 → ${tgtEq.name}`, 'system')
-          // 对目标军备自动选择目标
           const relayedCmd = tgtEq.commands[0]
           let relayTarget = targetId
           if (relayedCmd.targeting.scope === 'enemy-compartment' || relayedCmd.targeting.scope === 'enemy-ship') {
@@ -808,7 +958,6 @@ function executeTargetedCommand(
         combatStore.log(`深水炸弹: ${targetShip.name} 没有被鱼雷瞄准`, 'info')
         return
       }
-      // 逐颗判定 — 每个鱼雷独立50%概率失效
       let totalNegated = 0
       let totalCount = 0
       for (const t of torps) {
@@ -833,7 +982,7 @@ function executeTargetedCommand(
       combatStore.log(`${eqDef.name} 效果执行`, 'info')
   }
 
-  // 弹药库效果: 相邻战斗军备发动指挥时，返还一张指挥牌
+  // 弹药库效果
   if (eqDef.category === 'combat') {
     const compShip = shipStore.getShipByCompartment(comp.id)
     if (compShip) {
@@ -844,6 +993,11 @@ function executeTargetedCommand(
         combatStore.log('弹药库效果: 返还一张指挥牌', 'effect')
       }
     }
+  }
+
+  // 多人模式: 广播操作
+  if (isMP.value && !replayingRemote && !isRelay) {
+    multiplayerClient.sendBattleLog(`${player.name} 使用 ${eqDef.name}`, 'system')
   }
 }
 
@@ -907,7 +1061,6 @@ function adjacentComp(compId: string, offset: number): string | null {
   return adj?.id ?? null
 }
 
-/** 检查玩家是否在指定舱段 (支持多舱段军备的任意从属舱段) */
 function isPlayerOnCompartment(player: any, comp: any, ship: any): boolean {
   if (player.currentCompartmentIndex === comp.position) return true
   const playerComp = ship.compartments[player.currentCompartmentIndex]
@@ -918,18 +1071,15 @@ function isPlayerOnCompartment(player: any, comp: any, ship: any): boolean {
   return false
 }
 
-/** 计算完整空优: 非我方空优 = max(0, 敌方AS - 我方AS), 含防空炮 */
 function getFullAirSuperiority(shipId: string, teamId: string): number {
   const ship = shipStore.findShip(shipId)
   if (!ship) return combatStore.getAirSuperiority(shipId, teamId)
 
-  // 战斗机贡献
   const ownFighterAS = combatStore.fighterTokens
     .filter(t => t.shipId === shipId && t.ownerTeamId === teamId).length * 2
   const enemyFighterAS = combatStore.fighterTokens
     .filter(t => t.shipId === shipId && t.ownerTeamId !== teamId).length * 2
 
-  // 防空炮贡献 (击毁的不算)
   let aaBonus = 0
   for (const c of ship.compartments) {
     if (c.equipmentType === 'aa_gun' && !c.isDestroyed) {
@@ -937,11 +1087,8 @@ function getFullAirSuperiority(shipId: string, teamId: string): number {
     }
   }
 
-  // AA属于舰船拥有者
   const ownAS = ownFighterAS + (ship.ownerTeamId === teamId ? aaBonus : 0)
   const enemyAS = enemyFighterAS + (ship.ownerTeamId !== teamId ? aaBonus : 0)
-
-  // 非我方空优 = 敌方空优 - 我方空优, 不为负数
   return Math.max(0, enemyAS - ownAS)
 }
 
@@ -963,16 +1110,17 @@ function handleEndTurn(): void {
 
   uiStore.resetBattleState()
   if (isMP.value) {
-    // 多人: 通知服务端回合结束
     multiplayerClient.sendEndTurn()
+    multiplayerClient.sendBattleLog(`${gameStore.currentPlayer!.name} 结束回合`, 'system')
+    // 通知服务器弃牌
+    multiplayerClient.discardDownTo(ship?.compartments.length ?? 5)
     return
   }
-  // 热座: 本地推进回合
   if (gameStore.currentTurnPhase === 'action') {
-    gameStore.advancePhase() // action → discard
+    gameStore.advancePhase()
   }
   if (gameStore.currentTurnPhase === 'discard') {
-    gameStore.advancePhase() // discard → nextTurn (设为 'draw')
+    gameStore.advancePhase()
   }
 }
 

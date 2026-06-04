@@ -20,7 +20,7 @@ const shipStore = useShipStore()
 const combatStore = useCombatStore()
 const uiStore = useUiStore()
 
-const step = ref(0) // 0: mode, 1: players, 2: design phase
+const step = ref(0) // 0: mode, 1: players, 2: design phase, 3: multiplayer lobby
 
 // 模式选择
 const selectedMode = ref<GameMode>('hotseat')
@@ -86,6 +86,13 @@ function onMultiplayerStartDesign(room: RoomState): void {
   cardStore.initDeck()
   gameStore.startDesignPhase()
   router.push('/design')
+}
+
+function onMultiplayerStartBattle(room: RoomState): void {
+  // 当 room phase 变为 battle 时，DesignView 会处理 battle:init
+  // 这里只需确保 phase 设置正确
+  gameStore.startBattlePhase()
+  router.push('/battle')
 }
 
 function goToStep2(): void {
@@ -232,7 +239,11 @@ function startDesign(): void {
     </div>
 
     <div v-if="step === 3" class="setup-card">
-      <MultiplayerLobby @start-design="onMultiplayerStartDesign" @back="step = 0" />
+      <MultiplayerLobby
+        @start-design="onMultiplayerStartDesign"
+        @start-battle="onMultiplayerStartBattle"
+        @back="step = 0"
+      />
     </div>
   </div>
 </template>

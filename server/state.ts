@@ -1,4 +1,4 @@
-import type { SlotState, RoomState, ShipDesignData } from '../shared/protocol.js'
+import type { SlotState, RoomState, ShipDesignData, CardData } from '../shared/protocol.js'
 
 interface DesignState {
   ships: ShipDesignData[]
@@ -8,10 +8,17 @@ interface DesignState {
 export interface ServerRoom {
   state: RoomState
   designs: Map<string, DesignState>    // teamId → DesignState
+  readyTeams: Set<string>              // 已准备的队伍ID
   spawns: Map<number, { shipId: string; compIndex: number }> // slotIndex → spawn
   currentTurnSlot: number
+  roundNumber: number
   lastBattleInit: any                  // 缓存最近一次 battle:init payload
   battleLog: { message: string; type: string; timestamp: number }[]
+  // 服务端牌堆
+  drawPile: CardData[]
+  discardPile: CardData[]
+  playerHands: Map<number, CardData[]> // slotIndex → Card[]
+  playerNames: Map<string, string>     // socketId → playerName (临时存储，用于 slot join)
 }
 
 const rooms = new Map<string, ServerRoom>()
@@ -35,7 +42,19 @@ export function getRoomBySocket(socketId: string): { room: ServerRoom; code: str
 }
 
 export function newRoom(code: string, state: RoomState): ServerRoom {
-  const room: ServerRoom = { state, designs: new Map(), spawns: new Map(), currentTurnSlot: 0, battleLog: [] }
+  const room: ServerRoom = {
+    state,
+    designs: new Map(),
+    readyTeams: new Set(),
+    spawns: new Map(),
+    currentTurnSlot: 0,
+    roundNumber: 1,
+    battleLog: [],
+    drawPile: [],
+    discardPile: [],
+    playerHands: new Map(),
+    playerNames: new Map(),
+  }
   rooms.set(code, room)
   return room
 }

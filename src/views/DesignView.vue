@@ -130,7 +130,7 @@ function loadBattleAndGo(payload: any): void {
             equipmentType: c.equipmentType!,
           })),
       }))
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any)
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any, teamId)
     }
   }
   // 初始化队伍和玩家 (如果还没初始化)
@@ -393,7 +393,7 @@ function confirmDesign(): void {
       })),
   }))
 
-  shipStore.finalizeDesign(repPlayerId, teamId, designs)
+  shipStore.finalizeDesign(repPlayerId, teamId, designs, isMultiplayer.value ? teamId : undefined)
 
   // 多人模式: 不自动推进, 等服务端 allReady → battle:init
   if (isMultiplayer.value) return

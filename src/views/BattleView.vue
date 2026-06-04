@@ -164,7 +164,7 @@ if (isMP.value) {
             equipmentType: c.equipmentType!,
           })),
       }))
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any)
+      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any, teamId)
     }
 
     // 使用服务器牌堆

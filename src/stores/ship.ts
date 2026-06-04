@@ -23,9 +23,11 @@ export const useShipStore = defineStore('ship', () => {
   }
 
   // ===== 舰船设计方法 =====
-  function createShip(playerId: string, name: string, compartmentCount: number): Ship {
+  function createShip(playerId: string, name: string, compartmentCount: number, idPrefix?: string): Ship {
+    // 多人模式: 使用确定性 ID (不依赖共享计数器)
+    const shipId = idPrefix || nextShipId()
     const ship: Ship = {
-      id: nextShipId(),
+      id: shipId,
       name,
       ownerTeamId: '',
       ownerPlayerId: playerId,
@@ -33,8 +35,9 @@ export const useShipStore = defineStore('ship', () => {
     }
 
     for (let i = 0; i < compartmentCount; i++) {
+      const compId = idPrefix ? `${idPrefix}_comp_${i}` : nextCompId()
       const comp: Compartment = {
-        id: nextCompId(),
+        id: compId,
         shipId: ship.id,
         position: i,
         equipmentType: null,
@@ -118,9 +121,14 @@ export const useShipStore = defineStore('ship', () => {
   }
 
   /** 完成设计后将设计图实例化为正式舰船 */
-  function finalizeDesign(playerId: string, teamId: string, designs: ShipDesign[]): void {
-    for (const design of designs) {
-      const ship = createShip(playerId, design.name, design.compartmentCount)
+  function finalizeDesign(playerId: string, teamId: string, designs: ShipDesign[], idPrefix?: string): void {
+    for (let di = 0; di < designs.length; di++) {
+      const design = designs[di]
+      // 多人模式: 使用确定性 ID (teamId + shipIdx + compPos), 确保不同客户端生成相同 ID
+      const prefix = idPrefix || undefined
+      const ship = prefix
+        ? createShip(playerId, design.name, design.compartmentCount, `${prefix}_s${di}`)
+        : createShip(playerId, design.name, design.compartmentCount)
       ship.ownerTeamId = teamId
       for (const slot of design.slots) {
         if (slot.equipmentType) {

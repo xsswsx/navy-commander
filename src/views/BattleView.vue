@@ -93,6 +93,10 @@ if (isMP.value) {
     slotToPlayerId.value = slotMap
     playerIdToSlot.value = pidMap
 
+    // 出生顺序 (总是设置, 无论走哪条路径)
+    mpSpawnOrder.value = payload.spawnOrder || payload.turnOrder || []
+    mpSpawnIdx.value = 0
+
     // 通过 playerName 匹配本客户端槽位
     const storedName = localStorage.getItem('mp_playerId') || ''
     for (let i = 0; i < payload.players.length; i++) {
@@ -177,10 +181,6 @@ if (isMP.value) {
         combatStore.log(entry.message, entry.type as any)
       }
     }
-
-    // 出生顺序
-    mpSpawnOrder.value = payload.spawnOrder || payload.turnOrder || []
-    mpSpawnIdx.value = 0
 
     combatStore.log('战斗开始! 请选择出生点', 'system')
 

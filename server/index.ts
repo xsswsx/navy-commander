@@ -205,35 +205,6 @@ io.on('connection', (socket) => {
 
   // ===================== 战斗阶段 =====================
 
-  /** 获取有玩家的槽位索引数组 (按 slot.index 排序) */
-  function occupiedSlots(room: ReturnType<typeof getRoom>): number[] {
-    if (!room) return []
-    return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
-  }
-
-  /** 构建出生顺序 (与回合顺序一致) */
-  function buildSpawnOrder(room: ReturnType<typeof getRoom>): number[] {
-    if (!room) return []
-    const occ = occupiedSlots(room)
-    const order: number[] = []
-    const teamIds = [...new Set(room.state.slots.map(s => s.teamId))]
-    const teamQueues: Record<string, number[]> = {}
-    for (const idx of occ) {
-      const t = room.state.slots[idx].teamId
-      if (!teamQueues[t]) teamQueues[t] = []
-      teamQueues[t].push(idx)
-    }
-    let added = true
-    while (added) {
-      added = false
-      for (const tid of teamIds) {
-        const q = teamQueues[tid]
-        if (q && q.length > 0) { order.push(q.shift()!); added = true }
-      }
-    }
-    return order
-  }
-
   socket.on('battle:request', () => {
     const slot = getMySlot(socket.id)
     if (!slot) return
@@ -424,6 +395,35 @@ io.on('connection', (socket) => {
 })
 
 // ===================== 辅助函数 =====================
+
+/** 获取有玩家的槽位索引数组 (按 slot.index 排序) */
+function occupiedSlots(room: ReturnType<typeof getRoom>): number[] {
+  if (!room) return []
+  return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
+}
+
+/** 构建出生顺序 (与回合顺序一致) */
+function buildSpawnOrder(room: ReturnType<typeof getRoom>): number[] {
+  if (!room) return []
+  const occ = occupiedSlots(room)
+  const order: number[] = []
+  const teamIds = [...new Set(room.state.slots.map(s => s.teamId))]
+  const teamQueues: Record<string, number[]> = {}
+  for (const idx of occ) {
+    const t = room.state.slots[idx].teamId
+    if (!teamQueues[t]) teamQueues[t] = []
+    teamQueues[t].push(idx)
+  }
+  let added = true
+  while (added) {
+    added = false
+    for (const tid of teamIds) {
+      const q = teamQueues[tid]
+      if (q && q.length > 0) { order.push(q.shift()!); added = true }
+    }
+  }
+  return order
+}
 
 function broadcastDesignState(io: Server, room: ReturnType<typeof getRoom>, teamId: string) {
   if (!room) return

@@ -224,7 +224,7 @@ const allEquipment: EquipmentDefinition[] = [
         id: 'command_center_relay',
         name: '发令',
         actionType: 'command',
-        targeting: { scope: 'own-ship', range: Infinity },
+        targeting: { scope: 'own-compartment', range: Infinity },
       },
     ],
     triggers: [],

@@ -664,7 +664,12 @@ function commandCurrentCompartment(): void {
   }
   const ship = shipStore.findShip(player.currentShipId)
   if (!ship) { uiStore.resetBattleState(); return }
-  const comp = ship.compartments[player.currentCompartmentIndex ?? 0]
+  let comp = ship.compartments[player.currentCompartmentIndex ?? 0]
+  // 多舱段军备: 从属舱段重定向到主舱段
+  if (comp && comp.multiCompRootId && !comp.equipmentType) {
+    const master = ship.compartments.find(c => c.id === comp!.multiCompRootId)
+    if (master && master.equipmentType && !master.isDestroyed) comp = master
+  }
   if (!comp || !comp.equipmentType || comp.isDestroyed) {
     ElMessage.warning('当前舱段没有可指挥的军备')
     uiStore.resetBattleState()
@@ -1128,17 +1133,15 @@ function executeTargetedCommand(
     case 'command_room':
     case 'command_center':
     case 'integrated_command': {
-      // targetId 可能是 compartment ID (command_room) 或 ship ID (command_center/integrated_command)
-      // ship ID 时需找到该舰船上有指挥能力的第一个舱段
-      let tgtComp = shipStore.findCompartment(targetId)
-      if (!tgtComp) {
-        const tgtShip = shipStore.findShip(targetId)
-        if (tgtShip) {
-          tgtComp = tgtShip.compartments.find(c => c.equipmentType && !c.isDestroyed && getEquipment(c.equipmentType).commands.length > 0) ?? null
-        }
-      }
+      // targetId = 舱段ID (command_room/command_center 均用 own-compartment scope)
+      const tgtComp = shipStore.findCompartment(targetId)
       let relayed = false
       if (tgtComp && tgtComp.equipmentType) {
+        // 指挥中继装备不能中继到另一个指挥中继装备 (防止无限递归)
+        if (['command_room', 'command_center', 'integrated_command'].includes(tgtComp.equipmentType)) {
+          ElMessage.warning('不能对指挥类军备发动发令')
+          break
+        }
         const tgtEq = getEquipment(tgtComp.equipmentType)
         if (tgtEq.commands.length > 0) {
           const relayedCmd = tgtEq.commands[0]

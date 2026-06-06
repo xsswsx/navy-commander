@@ -124,12 +124,17 @@ if (isMP.value) {
     mpSpawnOrder.value = payload.spawnOrder || payload.turnOrder || []
     mpSpawnIdx.value = 0
 
-    // 通过 playerName 匹配本客户端槽位
-    const storedName = localStorage.getItem('mp_playerId') || ''
-    for (let i = 0; i < payload.players.length; i++) {
-      if (payload.players[i].name === storedName) {
-        mySlotIndex.value = payload.players[i].slotIndex
-        break
+    // 匹配本客户端槽位: sessionStorage (joinSlot 时存储) > playerName > 默认0
+    const storedSlot = sessionStorage.getItem('mp_slotIndex')
+    if (storedSlot !== null) {
+      mySlotIndex.value = Number(storedSlot)
+    } else {
+      const storedName = localStorage.getItem('mp_playerId') || ''
+      for (let i = 0; i < payload.players.length; i++) {
+        if (payload.players[i].name === storedName) {
+          mySlotIndex.value = payload.players[i].slotIndex
+          break
+        }
       }
     }
 
@@ -152,9 +157,9 @@ if (isMP.value) {
           combatStore.log(entry.message, entry.type as any)
         }
       }
-      // 检查是否已选择出生点
+      // 检查是否已选择出生点 (必须是自己回合才能显示对话框)
       const alreadySpawned = payload.spawns?.find((s: any) => s.slotIndex === mySlotIndex.value)
-      if (!alreadySpawned) {
+      if (!alreadySpawned && isMyTurnToSpawn.value) {
         const myP = getPlayerBySlot(mySlotIndex.value)
         if (myP && !myP.currentShipId) {
           spawnPlayerName.value = myP.name
@@ -509,9 +514,10 @@ watch(() => gameStore.currentTurnPhase, (phase) => {
 // ===== 抽牌 =====
 function startDrawPhase(): void {
   if (isMP.value) {
-    const playerId = gameStore.currentPlayerId!
-    const player = gameStore.currentPlayer
+    // 使用 getPlayerBySlot 而非 currentPlayer, 避免 slotToPlayerId 映射时序问题
+    const player = getPlayerBySlot(mySlotIndex.value)
     if (!player || !player.currentShipId) return
+    const playerId = player.id
     const ship = shipStore.findShip(player.currentShipId)
     if (!ship) return
     const comp = player.currentCompartmentIndex != null ? ship.compartments[player.currentCompartmentIndex] : null
@@ -649,6 +655,7 @@ function handleFreeCommand(): void {
 }
 
 function handleFreePass(): void {
+  if (!mpCanAct()) { ElMessage.warning('等待你的回合...'); return }
   if (gameStore.freeActionUsed) { ElMessage.warning('自由行动已用'); return }
   if (uiStore.battleState !== 'idle') { ElMessage.warning('请先完成当前操作'); return }
   gameStore.useFreeAction()
@@ -680,6 +687,7 @@ function commandCurrentCompartment(): void {
 
 // ===== 舱段点击 =====
 function handleCompartmentClick(compartmentId: string): void {
+  if (!mpCanAct()) return
   const state = uiStore.battleState
   if (state === 'idle') return
 
@@ -695,6 +703,7 @@ function handleCompartmentClick(compartmentId: string): void {
 }
 
 function handleShipClick(shipId: string): void {
+  if (!mpCanAct()) return
   if (uiStore.battleState === 'targeting_ship') {
     resolveTargetShip(shipId)
   }

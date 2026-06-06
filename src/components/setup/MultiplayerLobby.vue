@@ -73,8 +73,12 @@ function joinRoom(): void {
 
 function leaveRoom(): void { multiplayerClient.leaveSlot(); room.value = null }
 
-function joinSlot(idx: number): void { multiplayerClient.joinSlot(idx, playerId.value.trim()) }
-function leaveSlot(): void { multiplayerClient.leaveSlot() }
+function joinSlot(idx: number): void {
+  multiplayerClient.joinSlot(idx, playerId.value.trim())
+  // 存储槽位用于战斗阶段确认身份 (sessionStorage 而非 localStorage, 关闭页面即失效)
+  sessionStorage.setItem('mp_slotIndex', String(idx))
+}
+function leaveSlot(): void { multiplayerClient.leaveSlot(); sessionStorage.removeItem('mp_slotIndex') }
 function startGame(): void { multiplayerClient.startGame() }
 
 function copyCode(): void {

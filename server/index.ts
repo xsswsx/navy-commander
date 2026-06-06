@@ -266,9 +266,18 @@ io.on('connection', (socket) => {
     const turnOrder = room.lastBattleInit?.turnOrder || occupiedSlots(room)
     const curIdx = turnOrder.indexOf(room.currentTurnSlot)
     if (curIdx < 0) return
-    const nextIdx = (curIdx + 1) % turnOrder.length
+    // 跳过已断线/出局的槽位
+    let nextIdx = (curIdx + 1) % turnOrder.length
+    let safety = 0
+    while (safety < turnOrder.length) {
+      const checkSlot = turnOrder[nextIdx]
+      const s = room.state.slots[checkSlot]
+      if (s && s.playerName && s.socketId) break  // 活跃玩家
+      nextIdx = (nextIdx + 1) % turnOrder.length
+      safety++
+    }
     // 检测回合数变化 (绕回一圈 → 新回合)
-    if (nextIdx === 0) room.roundNumber++
+    if (nextIdx <= curIdx) room.roundNumber++
     room.currentTurnSlot = turnOrder[nextIdx]
     const payload = { playerSlotIndex: room.currentTurnSlot, roundNumber: room.roundNumber }
     io.to(slot.code).emit('battle:turn', payload)

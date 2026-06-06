@@ -1,4 +1,5 @@
 import type { SlotState, RoomState, ShipDesignData, CardData } from '../shared/protocol.js'
+import type { ServerCombatState } from './combatState.js'
 
 interface DesignState {
   ships: ShipDesignData[]
@@ -21,6 +22,9 @@ export interface ServerRoom {
   discardPile: CardData[]
   playerHands: Map<number, CardData[]> // slotIndex → Card[]
   playerNames: Map<string, string>     // socketId → playerName (临时存储，用于 slot join)
+  // 三层架构新增
+  combatState: ServerCombatState | null
+  shipIdMap: Map<string, string> | null // deterministic client ID → server ID
 }
 
 const rooms = new Map<string, ServerRoom>()
@@ -49,13 +53,18 @@ export function newRoom(code: string, state: RoomState): ServerRoom {
     designs: new Map(),
     readyTeams: new Set(),
     spawns: new Map(),
+    spawnOrder: [],
+    spawnIndex: 0,
     currentTurnSlot: 0,
     roundNumber: 1,
+    lastBattleInit: null,
     battleLog: [],
     drawPile: [],
     discardPile: [],
     playerHands: new Map(),
     playerNames: new Map(),
+    combatState: null,
+    shipIdMap: null,
   }
   rooms.set(code, room)
   return room

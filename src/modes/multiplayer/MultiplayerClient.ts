@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client'
-import type { RoomState, ShipDesignData, BattleAction, BattleInitPayload, CardData } from '@shared/protocol'
+import type { RoomState, ShipDesignData, BattleAction, BattleInitPayload, BattleStateSnapshot, CardData } from '@shared/protocol'
 
 type Cb = (...args: any[]) => void
 
@@ -56,6 +56,7 @@ export class MultiplayerClient {
   onDesignState(cb: (d: { teamId: string; ships: ShipDesignData[]; readySlots: number[]; isTeamReady?: boolean }) => void): () => void { return this.on('design:state', cb) }
   onBattleInit(cb: (p: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => void): () => void { return this.on('battle:init', cb) }
   onBattleAction(cb: (a: BattleAction) => void): () => void { return this.on('battle:action', cb) }
+  onBattleState(cb: (s: BattleStateSnapshot) => void): () => void { return this.on('battle:state', cb) }
   onBattleTurn(cb: (t: { playerSlotIndex: number; roundNumber?: number }) => void): () => void { return this.on('battle:turn', cb) }
   onBattleLog(cb: (e: { message: string; type: string; timestamp: number }) => void): () => void { return this.on('battle:log', cb) }
   onCardDrawn(cb: (d: { cards: CardData[]; hand: CardData[] }) => void): () => void { return this.on('card:drawn', cb) }

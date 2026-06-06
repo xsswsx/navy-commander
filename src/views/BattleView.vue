@@ -9,7 +9,7 @@ import { useUiStore } from '@/stores/ui'
 import { getEquipment } from '@/game/equipment/registry'
 import { rollDice, rollMultiple } from '@/game/dice'
 import type { Compartment } from '@/game/types'
-import type { BattleAction, BattleInitPayload } from '@shared/protocol'
+import type { BattleAction, BattleInitPayload, BattleStateSnapshot } from '@shared/protocol'
 import GameBoard from '@/components/battle/GameBoard.vue'
 import PlayerHand from '@/components/battle/PlayerHand.vue'
 import ActionBar from '@/components/battle/ActionBar.vue'
@@ -260,6 +260,11 @@ if (isMP.value) {
     replayingRemote = false
   }))
 
+  // ===== 显示层: 接收服务端全量状态快照, 覆盖本地所有战斗状态 =====
+  mpCleanups.push(multiplayerClient.onBattleState((snapshot: BattleStateSnapshot) => {
+    applyBattleStateSnapshot(snapshot)
+  }))
+
   mpCleanups.push(multiplayerClient.onBattleLog((entry) => {
     combatStore.log(entry.message, entry.type as any)
   }))
@@ -375,6 +380,55 @@ function handleSpawnSelect(compartmentId: string): void {
 }
 
 // ===== 远程操作回放 =====
+/** 接收服务端全量战斗状态快照, 覆盖本地状态 */
+function applyBattleStateSnapshot(s: BattleStateSnapshot): void {
+  // 舰船状态: 直接覆盖
+  shipStore.ships.length = 0
+  for (const ss of s.ships) {
+    shipStore.ships.push({
+      id: ss.shipId,
+      name: ss.name,
+      ownerTeamId: ss.teamId,
+      ownerPlayerId: ss.ownerPlayerId,
+      compartments: ss.compartments.map(c => ({
+        id: c.compId,
+        shipId: ss.shipId,
+        position: c.position,
+        equipmentType: c.equipmentType as any,
+        baseHp: c.maxHp,
+        equipmentHpMod: 0,
+        maxHp: c.maxHp,
+        currentHp: c.currentHp,
+        isDestroyed: c.isDestroyed,
+        multiCompRootId: c.multiCompRootId,
+        multiCompSlaveIds: c.multiCompSlaveIds,
+      })),
+    } as any)
+  }
+
+  // 玩家位置
+  for (const [slotIdx, pos] of Object.entries(s.playerPositions)) {
+    const pid = slotToPlayerId.value[Number(slotIdx)]
+    const player = pid ? gameStore.players.find(p => p.id === pid) : null
+    if (player) {
+      player.currentShipId = pos.shipId
+      player.currentCompartmentIndex = pos.compIndex
+    }
+  }
+
+  // 战斗 token
+  combatStore.fighterTokens.length = 0
+  combatStore.fighterTokens.push(...s.fighterTokens.map(f => ({ ...f, occupiesSortie: true })) as any)
+  combatStore.pendingTorpedoes.length = 0
+  combatStore.pendingTorpedoes.push(...s.torpedoSalvoes as any)
+  combatStore.activeEffects.length = 0
+  combatStore.activeEffects.push(...s.activeEffects as any)
+
+  // 回合同步
+  if (s.currentTurnSlot !== undefined) currentTurnSlot.value = s.currentTurnSlot
+  if (s.roundNumber !== undefined) mpRoundNumber.value = s.roundNumber
+}
+
 function handleRemoteAction(action: BattleAction): void {
   const senderSlot = action.senderSlotIndex ?? -1
   const senderPlayer = getPlayerBySlot(senderSlot)

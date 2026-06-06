@@ -112,6 +112,30 @@ export interface BattleInitPayload {
   spawnOrder: number[]              // 出生顺序 (slotIndex 排列)
 }
 
+// ==================== BattleState 全量同步 ====================
+
+export interface BattleStateCompartment {
+  compId: string; position: number; equipmentType: string | null
+  maxHp: number; currentHp: number; isDestroyed: boolean
+  multiCompRootId: string | null; multiCompSlaveIds: string[]
+}
+
+export interface BattleStateShip {
+  shipId: string; teamId: string; name: string; ownerPlayerId: string
+  compartments: BattleStateCompartment[]
+}
+
+export interface BattleStateSnapshot {
+  ships: BattleStateShip[]
+  playerPositions: Record<number, { shipId: string; compIndex: number }>
+  fighterTokens: { id: string; shipId: string; ownerTeamId: string; sourceCompartmentId: string; sourcePlayerId: string; remainingTurns: number }[]
+  torpedoSalvoes: { id: string; sourceCompartmentId: string; targetCompartmentId: string; torpedoCount: number; remainingTurns: number }[]
+  activeEffects: { id: string; effectType: string; sourceCompartmentId: string; affectedCompartmentIds: string[]; remainingTurns: number }[]
+  torpedoLoaded: Record<string, boolean>
+  currentTurnSlot: number
+  roundNumber: number
+}
+
 // ==================== 工具 ====================
 
 export function generateRoomCode(): string {

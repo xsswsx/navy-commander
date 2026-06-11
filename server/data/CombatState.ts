@@ -191,5 +191,12 @@ export function tickEffects(state: ServerCombatState): ServerCombatState {
   return s
 }
 
+/** 按 shipId 查找船只 */
+export function findShip(
+  state: ServerCombatState, shipId: string
+): ServerShip | undefined {
+  return state.ships.find(s => s.shipId === shipId)
+}
+
 // Re-export types for convenience
 export type { ServerCombatState, ServerCompartment, ServerShip, ServerFighterToken, ServerTorpedoSalvo, ServerActiveEffect }

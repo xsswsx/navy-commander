@@ -25,6 +25,7 @@ export interface ServerRoom {
   // 三层架构新增
   combatState: ServerCombatState | null
   shipIdMap: Map<string, string> | null // deterministic client ID → server ID
+  winner: string | null
 }
 
 const rooms = new Map<string, ServerRoom>()
@@ -65,6 +66,7 @@ export function newRoom(code: string, state: RoomState): ServerRoom {
     playerNames: new Map(),
     combatState: null,
     shipIdMap: null,
+    winner: null,
   }
   rooms.set(code, room)
   return room

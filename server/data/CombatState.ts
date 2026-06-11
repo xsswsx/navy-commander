@@ -198,5 +198,174 @@ export function findShip(
   return state.ships.find(s => s.shipId === shipId)
 }
 
+// ===== Query Functions =====
+
+export function findCompartment(
+  state: ServerCombatState, compId: string
+): ServerCompartment | null {
+  for (const ship of state.ships) {
+    const c = ship.compartments.find(co => co.compId === compId)
+    if (c) return c
+  }
+  return null
+}
+
+/** 按 shipId 查找船只 (返回 null 版本) */
+export function findShipOrNull(
+  state: ServerCombatState, shipId: string
+): ServerShip | null {
+  return state.ships.find(s => s.shipId === shipId) ?? null
+}
+
+export function findShipByComp(
+  state: ServerCombatState, compId: string
+): ServerShip | null {
+  for (const ship of state.ships) {
+    if (ship.compartments.some(c => c.compId === compId)) return ship
+  }
+  return null
+}
+
+export function getCompartmentByPosition(
+  ship: ServerShip, position: number
+): ServerCompartment | null {
+  return ship.compartments.find(c => c.position === position) ?? null
+}
+
+/** 获取与指定舱段距离 > 0 且 <= distance 的所有舱段 */
+export function getAdjacentComps(
+  state: ServerCombatState, compId: string, distance: number
+): ServerCompartment[] {
+  const ship = findShipByComp(state, compId)
+  if (!ship) return []
+  const comp = findCompartment(state, compId)
+  if (!comp) return []
+  return ship.compartments.filter(c =>
+    c.compId !== compId &&
+    Math.abs(c.position - comp.position) > 0 &&
+    Math.abs(c.position - comp.position) <= distance
+  )
+}
+
+export function isCompartmentSmoked(
+  state: ServerCombatState, compId: string
+): boolean {
+  return state.activeEffects.some(
+    e => (e.effectType === 'smoke_short' || e.effectType === 'smoke_long') &&
+      e.affectedCompartmentIds.includes(compId)
+  )
+}
+
+export function isShipSunk(
+  state: ServerCombatState, shipId: string
+): boolean {
+  const ship = findShip(state, shipId)
+  if (!ship) return false
+  return ship.compartments.every(c => c.isDestroyed)
+}
+
+export function isTeamDefeated(
+  state: ServerCombatState, teamId: string
+): boolean {
+  const teamShips = state.ships.filter(s => s.teamId === teamId)
+  if (teamShips.length === 0) return true
+  return teamShips.every(s => isShipSunk(state, s.shipId))
+}
+
+export function getCommandsUsed(
+  state: ServerCombatState, compId: string
+): number {
+  return state.commandsUsed[compId] ?? 0
+}
+
+export function isTorpedoLoaded(
+  state: ServerCombatState, compId: string
+): boolean {
+  return state.torpedoLoaded[compId] ?? false
+}
+
+export function canUseAmmoDepot(
+  state: ServerCombatState, compId: string
+): boolean {
+  return !state.ammoDepotUsed[compId]
+}
+
+export function getRandomLivingCompartment(
+  state: ServerCombatState, shipId: string
+): ServerCompartment | null {
+  const ship = findShip(state, shipId)
+  if (!ship) return null
+  const living = ship.compartments.filter(c => !c.isDestroyed)
+  if (living.length === 0) return null
+  return living[Math.floor(Math.random() * living.length)]
+}
+
+// ===== Destruction =====
+
+export interface DestructionResult {
+  state: ServerCombatState
+  logs: { message: string; type: string }[]
+}
+
+/** 处理击毁后的链式反应。调用前确保 comp.isDestroyed === true */
+export function handleDestruction(
+  state: ServerCombatState, compId: string
+): DestructionResult {
+  let s = clone(state)
+  const logs: { message: string; type: string }[] = []
+  const comp = findCompartment(s, compId)
+  if (!comp) return { state: s, logs }
+
+  // 弹药库殉爆
+  if (comp.equipmentType === 'ammo_depot') {
+    logs.push({ message: '弹药库殉爆! 殉爆8', type: 'destroy' })
+    const adj = getAdjacentComps(s, compId, 1)
+    for (const ac of adj) {
+      const result = applyDamage(s, ac.compId, 8)
+      s = result.state
+      const acShip = findShipByComp(s, ac.compId)
+      const shipName = acShip?.name ?? '?'
+      logs.push({
+        message: `殉爆 → ${shipName} 第${ac.position + 1}舱段 8伤害${result.destroyed ? ' — 击毁!' : ''}`,
+        type: result.destroyed ? 'destroy' : 'damage',
+      })
+      if (result.destroyed) {
+        const next = handleDestruction(s, ac.compId)
+        s = next.state
+        logs.push(...next.logs)
+      }
+    }
+  }
+
+  // 鱼雷装填状态殉爆
+  if (comp.equipmentType === 'quad_torpedo' && isTorpedoLoaded(state, compId)) {
+    logs.push({ message: '鱼雷殉爆! 殉爆5', type: 'destroy' })
+    const adj = getAdjacentComps(s, compId, 1)
+    for (const ac of adj) {
+      const result = applyDamage(s, ac.compId, 5)
+      s = result.state
+      const acShip = findShipByComp(s, ac.compId)
+      const shipName = acShip?.name ?? '?'
+      logs.push({
+        message: `殉爆 → ${shipName} 第${ac.position + 1}舱段 5伤害${result.destroyed ? ' — 击毁!' : ''}`,
+        type: result.destroyed ? 'destroy' : 'damage',
+      })
+      if (result.destroyed) {
+        const next = handleDestruction(s, ac.compId)
+        s = next.state
+        logs.push(...next.logs)
+      }
+    }
+  }
+
+  // 检查舰船沉没
+  const ship = findShipByComp(s, compId)
+  if (ship && isShipSunk(s, ship.shipId)) {
+    logs.push({ message: `${ship.name} 战沉!`, type: 'destroy' })
+  }
+
+  return { state: s, logs }
+}
+
 // Re-export types for convenience
 export type { ServerCombatState, ServerCompartment, ServerShip, ServerFighterToken, ServerTorpedoSalvo, ServerActiveEffect }

@@ -68,7 +68,7 @@ export function resetStateCounters(): void {
 
 /** 从设计数据构建初始战斗状态 (使用确定性ID与客户端一致) */
 export function buildCombatState(
-  designs: Map<string, { ships: { name: string; compartmentCount: number; slots: { compartmentIndex: number; equipmentType: string | null }[] }[] }>,
+  designs: Map<string, { ships: { name: string; compartments: { compartmentIndex: number; equipmentType: string | null }[] }[] }>,
   slotPlayerMap: Map<number, string>,  // slotIndex → teamId
   spawnEntries: Map<number, { shipId: string; compIndex: number }>
 ): { state: ServerCombatState } {
@@ -80,10 +80,10 @@ export function buildCombatState(
       const shipId = `${teamId}_s${si}`
       const compartments: ServerCompartment[] = []
 
-      for (let ci = 0; ci < design.slots.length; ci++) {
-        const slot = design.slots[ci]
+      for (let ci = 0; ci < design.compartments.length; ci++) {
+        const slot = design.compartments[ci]
         const compId = `${teamId}_s${si}_comp_${slot.compartmentIndex}`
-        const maxHp = 25 - design.compartmentCount
+        const maxHp = 25 - design.compartments.length
         compartments.push({
           compId,
           position: slot.compartmentIndex,

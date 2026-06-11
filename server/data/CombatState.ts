@@ -1,0 +1,123 @@
+// server/data/CombatState.ts
+// 数据层：纯函数。每个函数 (state, ...params) → { state, ...outputs }
+// 不掷骰子、不发 socket、不做权限检查。
+
+import type {
+  ServerCombatState, ServerCompartment, ServerShip,
+  ServerFighterToken, ServerTorpedoSalvo, ServerActiveEffect,
+} from '../combatState.js'
+
+// ===== helpers =====
+function clone<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj))
+}
+
+function findCompartmentIndex(
+  state: ServerCombatState, compId: string
+): { shipIdx: number; compIdx: number } | null {
+  for (let si = 0; si < state.ships.length; si++) {
+    const ci = state.ships[si].compartments.findIndex(c => c.compId === compId)
+    if (ci !== -1) return { shipIdx: si, compIdx: ci }
+  }
+  return null
+}
+
+// ===== Mutation Functions =====
+
+export interface DamageResult {
+  state: ServerCombatState
+  destroyed: boolean
+}
+
+/** 对舱段施加伤害，血量归零时标记 isDestroyed */
+export function applyDamage(
+  state: ServerCombatState, compId: string, damage: number
+): DamageResult {
+  const idx = findCompartmentIndex(state, compId)
+  if (!idx) return { state, destroyed: false }
+
+  const s = clone(state)
+  const comp = s.ships[idx.shipIdx].compartments[idx.compIdx]
+
+  if (comp.isDestroyed) return { state: s, destroyed: false }
+
+  comp.currentHp = Math.max(0, comp.currentHp - damage)
+  const destroyed = comp.currentHp <= 0
+  if (destroyed) {
+    comp.isDestroyed = true
+  }
+
+  return { state: s, destroyed }
+}
+
+/** 维修血量，不超过 maxHp */
+export function healCompartment(
+  state: ServerCombatState, compId: string, amount: number
+): ServerCombatState {
+  const idx = findCompartmentIndex(state, compId)
+  if (!idx) return state
+
+  const s = clone(state)
+  const comp = s.ships[idx.shipIdx].compartments[idx.compIdx]
+  if (comp.isDestroyed) return state
+
+  comp.currentHp = Math.min(comp.currentHp + amount, comp.maxHp)
+  return s
+}
+
+/** 玩家移动 */
+export function movePlayer(
+  state: ServerCombatState, slotIndex: number, shipId: string, compIndex: number
+): ServerCombatState {
+  const s = clone(state)
+  s.playerPositions[slotIndex] = { shipId, compIndex }
+  return s
+}
+
+/** 设置鱼雷装填状态 */
+export function setTorpedoLoaded(
+  state: ServerCombatState, compId: string, loaded: boolean
+): ServerCombatState {
+  const s = clone(state)
+  s.torpedoLoaded[compId] = loaded
+  return s
+}
+
+/** 记录一次指挥使用 */
+export function useCommand(
+  state: ServerCombatState, compId: string
+): ServerCombatState {
+  const s = clone(state)
+  s.commandsUsed[compId] = (s.commandsUsed[compId] ?? 0) + 1
+  return s
+}
+
+/** 记录一次出击 */
+export function useSortie(
+  state: ServerCombatState, compId: string
+): ServerCombatState {
+  const s = clone(state)
+  s.sortiesUsed[compId] = (s.sortiesUsed[compId] ?? 0) + 1
+  return s
+}
+
+/** 标记弹药库本回合已使用 */
+export function markAmmoDepotUsed(
+  state: ServerCombatState, compId: string
+): ServerCombatState {
+  const s = clone(state)
+  s.ammoDepotUsed[compId] = true
+  return s
+}
+
+/** 重置每回合计数器 */
+export function resetPerTurn(state: ServerCombatState): ServerCombatState {
+  const s = clone(state)
+  s.commandsUsed = {}
+  s.sortiesUsed = {}
+  s.ammoDepotUsed = {}
+  return s
+}
+
+// Re-export types for convenience
+export type { ServerCombatState, ServerCompartment, ServerShip, ServerFighterToken, ServerTorpedoSalvo, ServerActiveEffect }

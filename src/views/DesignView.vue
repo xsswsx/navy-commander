@@ -4,11 +4,10 @@ import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/game'
 import { useShipStore } from '@/stores/ship'
 import { useCardStore } from '@/stores/card'
-import { useCombatStore } from '@/stores/combat'
 import { useUiStore } from '@/stores/ui'
 import { getAllEquipment, getEquipmentByCategory } from '@/game/equipment/registry'
 import { baseHp } from '@/game/constants'
-import type { EquipmentType, ShipDesign, DesignSlot } from '@/game/types'
+import type { EquipmentType, ShipDesign } from '@/game/types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { multiplayerClient } from '@/modes/multiplayer/MultiplayerClient'
 
@@ -16,7 +15,6 @@ const router = useRouter()
 const gameStore = useGameStore()
 const shipStore = useShipStore()
 const cardStore = useCardStore()
-const combatStore = useCombatStore()
 const uiStore = useUiStore()
 const isMultiplayer = computed(() => gameStore.mode === 'multiplayer')
 const isTeamReady = ref(false)  // 本队伍是否已准备 (多人模式)
@@ -66,7 +64,6 @@ const selectedEquipment = ref<EquipmentType | null>(null)
 // ===== 多人模式 =====
 let syncingFromRemote = false
 let lastSentDesignJson = ''
-let battleInitReceived = false
 const mpCleanups: (() => void)[] = []
 
 onMounted(() => {
@@ -74,7 +71,7 @@ onMounted(() => {
   mpCleanups.push(multiplayerClient.onRoomState((r) => {
     mpSlots.value = r.slots || []
     mpReadyTeams.value = r.readyTeams || []
-    if (r.phase === 'battle' && !battleInitReceived) {
+    if (r.phase === 'battle') {
       multiplayerClient.requestBattleInit()
     }
   }))
@@ -98,10 +95,6 @@ onMounted(() => {
     syncingFromRemote = false
   }))
   mpCleanups.push(multiplayerClient.onBattleInit((payload) => {
-    console.log('[DesignView] battle:init received, battleInitReceived=', battleInitReceived, 'phase=', gameStore.phase)
-    if (battleInitReceived) return
-    battleInitReceived = true
-    console.log('[DesignView] calling loadBattleAndGo, phase=', gameStore.phase)
     loadBattleAndGo(payload)
   }))
   // 请求当前设计状态 (解决挂载后无初始数据问题)
@@ -113,12 +106,10 @@ onUnmounted(() => {
 })
 
 function loadBattleAndGo(payload: any): void {
-  console.log('[DesignView] loadBattleAndGo entry, phase=', gameStore.phase, 'battleInitReceived=', battleInitReceived)
-  if (battleInitReceived && gameStore.phase === 'battle') { console.log('[DesignView] loadBattleAndGo SKIP (already battle)'); return }
-  // 初始化所有舰船 (从所有阵营的设计)
-  // 注: 服务端发送 ShipDesignData 格式, 需转换为 ShipDesign 格式
+  if (gameStore.phase === 'battle') return
+
+  // Initialize ships
   for (const [teamId, designs] of Object.entries(payload.ships)) {
-    const rep = payload.players.find((p: any) => p.teamId === teamId)
     if (shipStore.ships.filter(s => s.ownerTeamId === teamId).length === 0) {
       const shipDesigns = (designs as any[]).map(d => ({
         name: d.name,
@@ -130,45 +121,18 @@ function loadBattleAndGo(payload: any): void {
             equipmentType: c.equipmentType!,
           })),
       }))
-      shipStore.finalizeDesign(rep?.name ?? '', teamId, shipDesigns as any, teamId)
+      shipStore.finalizeDesign('', teamId, shipDesigns as any, teamId)
     }
   }
-  // 初始化队伍和玩家 (如果还没初始化)
+
+  // Initialize teams and players if not done
   if (gameStore.players.length === 0) {
     gameStore.initTeams(payload.teams.map((t: any) => ({ id: t.id, name: t.name || t.id, color: t.color })))
     gameStore.initPlayers(payload.players.map((p: any) => ({ name: p.name, teamId: p.teamId })))
   }
-  // 使用服务器牌堆初始化 cardStore
-  cardStore.resetCardStore()
-  if (payload.drawPile && payload.drawPile.length > 0) {
-    // 直接设置服务端传来的牌堆和手牌
-    cardStore.drawPile = payload.drawPile
-    cardStore.discardPile = payload.discardPile || []
-    // 构建 slotIndex → player.id 映射 (处理非连续槽位)
-    const slotToPid: Record<number, string> = {}
-    for (let i = 0; i < payload.players.length; i++) {
-      const p = gameStore.players[i]
-      if (p) slotToPid[payload.players[i].slotIndex] = p.id
-    }
-    cardStore.playerHands = {}
-    for (const [si, hand] of Object.entries(payload.playerHands)) {
-      const pid = slotToPid[Number(si)]
-      if (pid) {
-        cardStore.playerHands[pid] = hand as any[]
-      }
-    }
-  } else {
-    cardStore.initDeck()
-    cardStore.dealInitialHands(gameStore.players.map((p: any) => p.id))
-  }
-  combatStore.log('战斗开始! 请选择出生点', 'system')
+
   gameStore.startBattlePhase()
-  console.log('[DesignView] phase set to battle, navigating to /battle, phase=', gameStore.phase)
-  router.push('/battle').then(() => {
-    console.log('[DesignView] router.push /battle resolved')
-  }).catch((e: any) => {
-    console.error('[DesignView] router.push /battle FAILED:', e)
-  })
+  router.push('/battle')
 }
 
 function mpSync(): void {

@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client'
-import type { RoomState, ShipDesignData, BattleAction, BattleInitPayload, BattleStateSnapshot, CardData } from '@shared/protocol'
+import type { RoomState, ShipDesignData, BattleInitPayload, BattleStateSnapshot, CardData } from '@shared/protocol'
 
 type Cb = (...args: any[]) => void
 
@@ -29,8 +29,10 @@ export class MultiplayerClient {
   requestBattleInit(): void { this.socket?.emit('battle:request') }
   sendSpawn(compId: string, shipId?: string): void { this.socket?.emit('battle:spawn', { compartmentId: compId, shipId }) }
   sendEndTurn(): void { this.socket?.emit('battle:endTurn') }
-  sendAction(action: BattleAction): void { this.socket?.emit('battle:action', action) }
-  sendBattleLog(message: string, type: string = 'info'): void { this.socket?.emit('battle:log', { message, type }) }
+  // 新增 — 发送意图
+  sendIntent(intent: import('@shared/protocol').ClientIntent): void {
+    this.socket?.emit('battle:intent', intent)
+  }
   // 卡牌操作
   drawCards(count: number): void { this.socket?.emit('card:draw', { count }) }
   discardCards(cardIds: string[]): void { this.socket?.emit('card:discard', { cardIds }) }
@@ -55,7 +57,7 @@ export class MultiplayerClient {
   onRoomState(cb: (s: RoomState) => void): () => void { return this.on('room:state', cb) }
   onDesignState(cb: (d: { teamId: string; ships: ShipDesignData[]; readySlots: number[]; isTeamReady?: boolean }) => void): () => void { return this.on('design:state', cb) }
   onBattleInit(cb: (p: BattleInitPayload & { currentTurnSlot?: number; roundNumber?: number; spawns?: any[]; battleLog?: any[] }) => void): () => void { return this.on('battle:init', cb) }
-  onBattleAction(cb: (a: BattleAction) => void): () => void { return this.on('battle:action', cb) }
+  onBattleEnd(cb: (d: { winner: string }) => void): () => void { return this.on('battle:end', cb) }
   onBattleState(cb: (s: BattleStateSnapshot) => void): () => void { return this.on('battle:state', cb) }
   onBattleTurn(cb: (t: { playerSlotIndex: number; roundNumber?: number }) => void): () => void { return this.on('battle:turn', cb) }
   onBattleLog(cb: (e: { message: string; type: string; timestamp: number }) => void): () => void { return this.on('battle:log', cb) }

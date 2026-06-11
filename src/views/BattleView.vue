@@ -447,28 +447,7 @@ watch(() => gameStore.currentTurnPhase, (phase) => {
 // ===== 抽牌 =====
 function startDrawPhase(): void {
   if (isMP.value) {
-    // 使用 getPlayerBySlot 而非 currentPlayer, 避免 slotToPlayerId 映射时序问题
-    const player = getPlayerBySlot(mySlotIndex.value)
-    if (!player || !player.currentShipId) return
-    const playerId = player.id
-    const ship = shipStore.findShip(player.currentShipId)
-    if (!ship) return
-    const comp = player.currentCompartmentIndex != null ? ship.compartments[player.currentCompartmentIndex] : null
-    // 基础抽牌 2 + 舱段抽牌值 + 第一轮补偿
-    let drawAmount = 2 + (comp ? shipStore.getDrawValue(comp) : 0)
-    const compensation = gameStore.getFirstRoundCompensation(playerId)
-    if (compensation > 0) {
-      drawAmount += compensation
-      combatStore.log(`${player.name} 第一轮后攻补偿 +${compensation}张`, 'system')
-    }
-    if (drawAmount > 0) {
-      multiplayerClient.drawCards(drawAmount)
-    } else {
-      gameStore.advancePhase()
-    }
-    combatStore.log(`${player.name} 在 ${comp ? getEquipment(comp.equipmentType!)?.name ?? '空舱段' : '?'} 抽 ${drawAmount} 张`, 'system')
-    combatStore.resetPerTurnCounters()
-    uiStore.resetBattleState()
+    multiplayerClient.requestDrawPhase()
     return
   }
 
@@ -511,6 +490,9 @@ function handlePlayCard(cardId: string): void {
       uiStore.selectedCardIds = [cardId]
       uiStore.pendingAction = 'command'
       uiStore.isFreeAction = false
+      if (isMP.value) {
+        multiplayerClient.playCard(cardId)
+      }
       commandCurrentCompartment()
       break
     case 'action':
@@ -524,22 +506,28 @@ function handlePlayCard(cardId: string): void {
         cancelButtonText: '指挥',
         type: 'info',
       }).then(() => {
+        if (isMP.value) {
+          multiplayerClient.playCard(cardId)
+        }
         uiStore.pendingAction = 'move'
         uiStore.enterMovingState()
         ElMessage.info('选择目标舱段 (手牌移动: 1格)')
       }).catch(() => {
+        if (isMP.value) {
+          multiplayerClient.playCard(cardId)
+        }
         uiStore.pendingAction = 'command'
         commandCurrentCompartment()
       })
       break
     case 'coffee':
+      if (isMP.value) {
+        multiplayerClient.playCard(cardId)
+        return
+      }
       cardStore.removeCardFromHand(playerId, cardId)
       cardStore.playerDrawCards(playerId, 2)
       combatStore.log(`${gameStore.currentPlayer!.name} 使用咖啡，抽2张牌`, 'system')
-      if (isMP.value) {
-        multiplayerClient.discardCards([cardId])
-        multiplayerClient.drawCards(2)
-      }
       break
     case 'scheme':
       handleSchemeCard(cardId)
@@ -664,11 +652,15 @@ function resolveMove(compartmentId: string): void {
   }
 
   if (isMP.value) {
-    multiplayerClient.discardCards(uiStore.selectedCardIds)
+    const isCardMove = uiStore.pendingAction === 'move' && !uiStore.isFreeAction
+    if (isCardMove && uiStore.selectedCardIds.length > 0) {
+      multiplayerClient.playCard(uiStore.selectedCardIds[0])
+    }
     multiplayerClient.sendIntent({
       type: 'freeMove',
       payload: { toCompId: compartmentId },
     })
+    if (uiStore.isFreeAction) gameStore.useFreeAction()
     uiStore.resetBattleState()
     return
   }
@@ -912,15 +904,24 @@ function executeTargetedCommand(
 
   // 多人模式: 服务器权威, 发送意图后短接, 不本地执行
   if (isMP.value) {
-    multiplayerClient.discardCards(uiStore.selectedCardIds)
-    const payload: any = { sourceCompId: comp.id, commandId: cmdId }
-    // 根据当前 UI 瞄准模式决定发送 compartment ID 还是 ship ID
-    if (uiStore.battleState === 'targeting_ship') {
-      payload.targetShipId = targetId
+    if (uiStore.isFreeAction) {
+      multiplayerClient.sendIntent({
+        type: 'freeCommand',
+        payload: { compartmentId: comp.id },
+      })
     } else {
-      payload.targetCompId = targetId
+      if (uiStore.selectedCardIds.length > 0) {
+        multiplayerClient.playCard(uiStore.selectedCardIds[0])
+      }
+      const payload: any = { sourceCompId: comp.id, commandId: cmdId }
+      if (uiStore.battleState === 'targeting_ship') {
+        payload.targetShipId = targetId
+      } else {
+        payload.targetCompId = targetId
+      }
+      multiplayerClient.sendIntent({ type: 'targetSelection', payload })
     }
-    multiplayerClient.sendIntent({ type: 'targetSelection', payload })
+    uiStore.resetBattleState()
     return
   }
 

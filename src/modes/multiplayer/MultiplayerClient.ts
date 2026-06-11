@@ -34,6 +34,8 @@ export class MultiplayerClient {
     this.socket?.emit('battle:intent', intent)
   }
   // 卡牌操作
+  playCard(cardId: string): void { this.socket?.emit('card:play', { cardId }) }
+  requestDrawPhase(): void { this.socket?.emit('card:drawPhase') }
   drawCards(count: number): void { this.socket?.emit('card:draw', { count }) }
   discardCards(cardIds: string[]): void { this.socket?.emit('card:discard', { cardIds }) }
   discardDownTo(maxCards: number): void { this.socket?.emit('card:discardDownTo', { maxCards }) }

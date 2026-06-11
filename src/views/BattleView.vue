@@ -9,7 +9,7 @@ import { useUiStore } from '@/stores/ui'
 import { getEquipment } from '@/game/equipment/registry'
 import { rollDice, rollMultiple } from '@/game/dice'
 import type { Compartment } from '@/game/types'
-import type { BattleAction, BattleInitPayload, BattleStateSnapshot } from '@shared/protocol'
+import type { BattleInitPayload, BattleStateSnapshot } from '@shared/protocol'
 import GameBoard from '@/components/battle/GameBoard.vue'
 import PlayerHand from '@/components/battle/PlayerHand.vue'
 import ActionBar from '@/components/battle/ActionBar.vue'
@@ -62,32 +62,6 @@ const myTeamId = computed(() => {
   return spawnTeamId.value || gameStore.currentPlayer?.teamId || ''
 })
 
-// 防御: 防止远程操作触发本地操作再发送回服务器
-let replayingRemote = false
-/** 当前操作积累的战斗结果 (操作完成后一次性发送) */
-let pendingResults: import('@shared/protocol').CombatActionResult[] = []
-let mpPendingDrawPhase = false
-/** 追踪命令执行期间新增的战斗日志, 用于同步到远程客户端 */
-let preCommandLogLen = 0
-function markPreCommandLog(): void { preCommandLogLen = combatStore.combatLog.length }
-function flushPendingResults(logMsg?: string, logType?: string): void {
-  // 收集执行期间新增的日志
-  const newEntries = combatStore.combatLog.slice(preCommandLogLen)
-  preCommandLogLen = combatStore.combatLog.length
-  if (pendingResults.length === 0 && newEntries.length === 0) return
-  multiplayerClient.sendAction({
-    type: 'playCard',
-    senderSlotIndex: mySlotIndex.value,
-    results: [...pendingResults],
-    logMessage: logMsg,
-    logType: logType,
-  } as any)
-  pendingResults = []
-  // 同步详细战斗日志到所有客户端
-  for (const e of newEntries) {
-    multiplayerClient.sendBattleLog(e.message, e.type)
-  }
-}
 // slotIndex → player.id 映射 (因 players 数组可能不连续)
 const slotToPlayerId = ref<Record<number, string>>({})
 const playerIdToSlot = ref<Record<string, number>>({})
@@ -252,14 +226,6 @@ if (isMP.value) {
     }
   }))
 
-  mpCleanups.push(multiplayerClient.onBattleAction((action: BattleAction) => {
-    // 忽略自己的操作 (本地已执行)
-    if (action.senderSlotIndex === mySlotIndex.value) return
-    replayingRemote = true
-    handleRemoteAction(action)
-    replayingRemote = false
-  }))
-
   // ===== 显示层: 接收服务端全量状态快照, 覆盖本地所有战斗状态 =====
   mpCleanups.push(multiplayerClient.onBattleState((snapshot: BattleStateSnapshot) => {
     applyBattleStateSnapshot(snapshot)
@@ -269,15 +235,15 @@ if (isMP.value) {
     combatStore.log(entry.message, entry.type as any)
   }))
 
+  mpCleanups.push(multiplayerClient.onBattleEnd(({ winner }: { winner: string }) => {
+    combatStore.log(`战斗结束! 胜者: ${winner}`, 'system')
+    router.push('/results')
+  }))
+
   mpCleanups.push(multiplayerClient.onCardDrawn((d) => {
     const pid = gameStore.currentPlayerId || slotToPlayerId.value[mySlotIndex.value]
     if (pid) {
       cardStore.playerHands[pid] = d.hand as any
-    }
-    // 如果正在等待抽牌完成, 进入行动阶段
-    if (mpPendingDrawPhase) {
-      mpPendingDrawPhase = false
-      gameStore.advancePhase()
     }
   }))
 }
@@ -382,6 +348,11 @@ function handleSpawnSelect(compartmentId: string): void {
 // ===== 远程操作回放 =====
 /** 接收服务端全量战斗状态快照, 覆盖本地状态 */
 function applyBattleStateSnapshot(s: BattleStateSnapshot): void {
+  // 完全清除所有战斗 token, 等待服务端全量覆盖
+  combatStore.fighterTokens.length = 0
+  combatStore.pendingTorpedoes.length = 0
+  combatStore.activeEffects.length = 0
+
   // 舰船状态: 直接覆盖
   shipStore.ships.length = 0
   for (const ss of s.ships) {
@@ -427,121 +398,22 @@ function applyBattleStateSnapshot(s: BattleStateSnapshot): void {
   // 回合同步
   if (s.currentTurnSlot !== undefined) currentTurnSlot.value = s.currentTurnSlot
   if (s.roundNumber !== undefined) mpRoundNumber.value = s.roundNumber
-}
 
-function handleRemoteAction(action: BattleAction): void {
-  const senderSlot = action.senderSlotIndex ?? -1
-  const senderPlayer = getPlayerBySlot(senderSlot)
-  if (!senderPlayer) return
-
-  if (action.logMessage) {
-    combatStore.log(action.logMessage, (action.logType || 'info') as any)
+  // Check win
+  if (s.winner) {
+    combatStore.log(`战斗结束! 胜者: ${s.winner}`, 'system')
+    router.push('/results')
+    return
   }
 
-  switch (action.type) {
-    case 'selectSpawn': {
-      if (action.compartmentId) {
-        const ship = shipStore.getShipByCompartment(action.compartmentId)
-        const comp = ship?.compartments.find(c => c.id === action.compartmentId)
-        if (ship && comp) {
-          senderPlayer.currentShipId = ship.id
-          senderPlayer.currentCompartmentIndex = comp.position
-          combatStore.log(`${senderPlayer.name} 在 ${ship.name} 舱段${comp.position + 1} 出生`, 'system')
-        }
-      }
-      // 推进出生顺序
-      mpSpawnIdx.value++
-      // 如果轮到我了 → 显示出生对话框
-      if (isMyTurnToSpawn.value) {
-        const myP = getPlayerBySlot(mySlotIndex.value)
-        if (myP && !myP.currentShipId) {
-          spawnPlayerName.value = myP.name
-          showSpawnDialog.value = true
-        }
-      }
-      break
-    }
-    case 'endTurn': {
-      combatStore.log(`${senderPlayer.name} 结束回合`, 'system')
-      combatStore.tickEffects()
-      combatStore.tickFighterTurns()
-      combatStore.resetPerTurnCounters()
-      break
-    }
-    case 'playCard':
-    default: {
-      // 重放战斗结果 (playCard 携带 results 用于跨客户端同步)
-      if (action.logMessage) {
-        combatStore.log(action.logMessage, (action.logType || 'info') as any)
-      }
-      replayResults(action.results || [], senderPlayer)
-      // 重放完成后检查舰船沉没/队伍覆灭
-      for (const dmg of (action.results || []).filter(r => r.op === 'damage').flatMap(r => r.damages || [])) {
-        if (dmg.destroyed) {
-          const ship = shipStore.getShipByCompartment(dmg.compartmentId)
-          if (ship && shipStore.isShipSunk(ship.id)) {
-            combatStore.log(`${ship.name} 战沉!`, 'destroy')
-            for (const p of gameStore.players) {
-              if (p.currentShipId === ship.id) gameStore.eliminatePlayer(p.id)
-            }
-            if (shipStore.isTeamDefeated(ship.ownerTeamId)) {
-              combatStore.log(`队伍 ${ship.ownerTeamId} 全军覆没!`, 'destroy')
-            }
-          }
-          gameStore.checkWinCondition()
-        }
-      }
-      break
-    }
-  }
-}
-
-/** 远程重放战斗结果 */
-function replayResults(results: import('@shared/protocol').CombatActionResult[], senderPlayer: any): void {
-  for (const r of results) {
-    switch (r.op) {
-      case 'damage': {
-        for (const d of r.damages || []) {
-          shipStore.applyDamage(d.compartmentId, d.damage)
-          combatStore.log(`${r.source || '?'} → ${compLabel(d.compartmentId)} ${d.damage}伤害${d.destroyed ? ' — 击毁!' : ''}`, d.destroyed ? 'destroy' : 'damage')
-          // 注意: 发送方已在 results 中包含了链式反应伤害 (弹药库殉爆等),
-          // 所以不在重放端再次触发 handleCompDestroyed, 避免重复伤害
-        }
-        break
-      }
-      case 'addTorpedo': {
-        if (r.torpSourceCompId && r.torpTargetCompId) {
-          combatStore.addTorpedoSalvo(r.torpSourceCompId, r.torpTargetCompId, r.torpCount || 0, r.torpTurns || 0)
-          combatStore.log(`鱼雷发射! ${r.torpCount}颗 → ${r.torpTargetCompId}`, 'system')
-        }
-        break
-      }
-      case 'addFighter': {
-        if (r.fighterShipId && r.fighterTeamId) {
-          combatStore.addFighterToken(r.fighterShipId, r.fighterTeamId, r.fighterCompId || '', senderPlayer.id, r.fighterTurns || 0)
-          combatStore.log(`战斗机起飞 → ${shipStore.findShip(r.fighterShipId)?.name ?? r.fighterShipId}, 空优+2`, 'effect')
-        }
-        break
-      }
-      case 'addEffect': {
-        if (r.effectType && r.effectSourceCompId) {
-          combatStore.addEffect(r.effectType as any, r.effectSourceCompId, r.effectAffectedCompIds || [], r.effectTurns || 0)
-          combatStore.log(`烟幕 (${r.effectType === 'smoke_short' ? '半' : '全'}回合): ${r.effectTurns}回合`, 'effect')
-        }
-        break
-      }
-      case 'compHeal': {
-        if (r.healCompId) {
-          shipStore.healCompartment(r.healCompId, r.healAmount || 0)
-          combatStore.log(`维修 HP+${r.healAmount}`, 'effect')
-        }
-        break
-      }
-      case 'move': {
-        if (r.toCompIdx != null) {
-          senderPlayer.currentCompartmentIndex = r.toCompIdx
-        }
-        break
+  // Check spawn phase
+  if (s.phase === 'spawn') {
+    const alreadySpawned = s.playerPositions[mySlotIndex.value]
+    if (!alreadySpawned && isMyTurnToSpawn.value) {
+      const myP = getPlayerBySlot(mySlotIndex.value)
+      if (myP && !myP.currentShipId) {
+        spawnPlayerName.value = myP.name
+        showSpawnDialog.value = true
       }
     }
   }
@@ -583,7 +455,6 @@ function startDrawPhase(): void {
       combatStore.log(`${player.name} 第一轮后攻补偿 +${compensation}张`, 'system')
     }
     if (drawAmount > 0) {
-      mpPendingDrawPhase = true
       multiplayerClient.drawCards(drawAmount)
     } else {
       gameStore.advancePhase()
@@ -661,7 +532,6 @@ function handlePlayCard(cardId: string): void {
       if (isMP.value) {
         multiplayerClient.discardCards([cardId])
         multiplayerClient.drawCards(2)
-        multiplayerClient.sendBattleLog(`${gameStore.currentPlayer!.name} 使用咖啡，抽2张牌`, 'system')
       }
       break
     case 'scheme':
@@ -786,21 +656,23 @@ function resolveMove(compartmentId: string): void {
     return
   }
 
+  if (isMP.value) {
+    multiplayerClient.discardCards(uiStore.selectedCardIds)
+    multiplayerClient.sendIntent({
+      type: 'freeMove',
+      payload: { toCompId: compartmentId },
+    })
+    uiStore.resetBattleState()
+    return
+  }
+
   player.currentCompartmentIndex = targetComp.position
   combatStore.log(`${player.name} 移动到舱段${targetComp.position + 1} (${isCardMove ? '手牌移动' : '跑动'})`, 'system')
 
   if (uiStore.selectedCardIds.length > 0) {
     cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
-    if (isMP.value) {
-    multiplayerClient.discardCards(uiStore.selectedCardIds)
-    pendingResults.push({ op: 'move', toCompIdx: targetComp.position })
-  }
   }
   if (uiStore.isFreeAction) gameStore.useFreeAction()
-
-  if (isMP.value) {
-    multiplayerClient.sendBattleLog(`${player.name} 移动到舱段${targetComp.position + 1}`, 'system')
-  }
 
   uiStore.resetBattleState()
   ElMessage.success(`已移动到舱段${targetComp.position + 1}`)
@@ -1031,12 +903,19 @@ function executeTargetedCommand(
   const eqType = comp.equipmentType
   const eqDef = getEquipment(eqType)
 
+  // 多人模式: 服务器权威, 发送意图后短接, 不本地执行
+  if (isMP.value) {
+    multiplayerClient.discardCards(uiStore.selectedCardIds)
+    multiplayerClient.sendIntent({
+      type: 'targetSelection',
+      payload: { sourceCompId: comp.id, targetCompId: targetId, commandId: cmdId },
+    })
+    return
+  }
+
   // 命令中继装备 (command_room/command_center/integrated_command):
   // card 和 command count 在中继成功后扣除, 避免中继失败时白扣
   const isRelaySrc = !isRelay && ['command_room', 'command_center', 'integrated_command'].includes(eqType)
-
-  // 标记操作前日志位置, 用于后续同步
-  if (!isRelay && isMP.value && !replayingRemote) markPreCommandLog()
 
   if (!isRelaySrc) {
     combatStore.useCommand(comp.id)
@@ -1044,7 +923,6 @@ function executeTargetedCommand(
   if (!isRelay && !isRelaySrc) {
     if (uiStore.selectedCardIds.length > 0) {
       cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
-      if (isMP.value && !replayingRemote) multiplayerClient.discardCards(uiStore.selectedCardIds)
     }
     if (uiStore.isFreeAction) gameStore.useFreeAction()
   }
@@ -1130,7 +1008,6 @@ function executeTargetedCommand(
         combatStore.addTorpedoSalvo(comp.id, targetId, 4, fullRound)
         combatStore.setTorpedoLoaded(comp.id, false)
         combatStore.log(`鱼雷发射! 4颗, ${fullRound}全回合后到达`, 'system')
-        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addTorpedo', torpSourceCompId: comp.id, torpTargetCompId: targetId, torpCount: 4, torpTurns: fullRound })
         ElMessage.success('4颗鱼雷发射!')
       }
       break
@@ -1141,7 +1018,6 @@ function executeTargetedCommand(
       const tgtShipId = targetId
       if (cmdId.includes('fighter')) {
         combatStore.addFighterToken(tgtShipId, player.teamId, comp.id, playerId, gameStore.alivePlayerCount)
-        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addFighter', fighterShipId: tgtShipId, fighterTeamId: player.teamId, fighterCompId: comp.id, fighterTurns: gameStore.alivePlayerCount })
         combatStore.log(`战斗机起飞 → ${shipStore.findShip(tgtShipId)?.name ?? tgtShipId}, 空优+2`, 'effect')
       } else if (cmdId.includes('bomber')) {
         const nfa = getFullAirSuperiority(tgtShipId, player.teamId)
@@ -1167,7 +1043,6 @@ function executeTargetedCommand(
       const isShort = cmdId === 'smoke_short'
       const turns = isShort ? Math.ceil(gameStore.alivePlayerCount / 2) : gameStore.alivePlayerCount
       combatStore.addEffect(isShort ? 'smoke_short' : 'smoke_long', comp.id, affected, turns)
-      if (isMP.value && !replayingRemote) pendingResults.push({ op: 'addEffect', effectType: isShort ? 'smoke_short' : 'smoke_long', effectSourceCompId: comp.id, effectAffectedCompIds: affected, effectTurns: turns })
       combatStore.log(`烟幕 (${isShort ? '半' : '全'}回合): ${turns}回合`, 'effect')
       break
     }
@@ -1176,17 +1051,14 @@ function executeTargetedCommand(
       if (cmdId === 'damage_control_repair') {
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         shipStore.healCompartment(comp.id, 2)
-        if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: comp.id, healAmount: 2 })
         for (const ac of adj) {
           shipStore.healCompartment(ac.id, 2)
-          if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: ac.id, healAmount: 2 })
         }
         combatStore.log('综合修复 HP+2', 'effect')
       } else {
         const adj = shipStore.getAdjacentCompartments(comp.id, 2)
         if (adj.length > 0) {
           shipStore.healCompartment(adj[0].id, 8)
-          if (isMP.value && !replayingRemote) pendingResults.push({ op: 'compHeal', healCompId: adj[0].id, healAmount: 8 })
           combatStore.log('快速抢修 HP+8', 'effect')
         }
       }
@@ -1232,7 +1104,6 @@ function executeTargetedCommand(
         combatStore.useCommand(comp.id)
         if (uiStore.selectedCardIds.length > 0) {
           cardStore.removeCardFromHand(playerId, uiStore.selectedCardIds[0])
-          if (isMP.value && !replayingRemote) multiplayerClient.discardCards(uiStore.selectedCardIds)
         }
         if (uiStore.isFreeAction) gameStore.useFreeAction()
       } else if (isRelaySrc && !relayed) {
@@ -1294,10 +1165,6 @@ function executeTargetedCommand(
     }
   }
 
-  // 多人模式: 广播战斗结果
-  if (isMP.value && !replayingRemote && !isRelay) {
-    flushPendingResults(`${player.name} 使用 ${eqDef.name}`, 'system')
-  }
 }
 
 // ===== 伤害 =====
@@ -1314,10 +1181,6 @@ function applyHitDamage(compId: string, damage: number, source: string): void {
   if (!comp) return
   const result = shipStore.applyDamage(compId, damage)
   combatStore.log(`${source} → ${compLabel(compId)} ${damage}伤害${result.destroyed ? ' — 击毁!' : ''}`, result.destroyed ? 'destroy' : 'damage')
-  // 记录结果用于跨客户端同步
-  if (isMP.value && !replayingRemote) {
-    pendingResults.push({ op: 'damage', source, damages: [{ compartmentId: compId, damage, destroyed: result.destroyed }] })
-  }
   if (result.destroyed) handleCompDestroyed(compId)
 }
 
@@ -1406,9 +1269,13 @@ function getFullAirSuperiority(shipId: string, teamId: string): number {
 // ===== 回合结束 =====
 function handleEndTurn(): void {
   if (!mpCanAct()) { ElMessage.warning('等待你的回合...'); return }
-  // 追踪回合结束时的日志 (鱼雷伤害/效果到期等)
-  if (isMP.value && !replayingRemote) markPreCommandLog()
   const playerId = gameStore.currentPlayerId!
+
+  if (isMP.value) {
+    multiplayerClient.sendEndTurn()
+    return
+  }
+
   const ship = gameStore.currentPlayer?.currentShipId
     ? shipStore.findShip(gameStore.currentPlayer.currentShipId) : null
   cardStore.discardDownTo(playerId, ship?.compartments.length ?? 5)
@@ -1423,13 +1290,6 @@ function handleEndTurn(): void {
   }
 
   uiStore.resetBattleState()
-  if (isMP.value) {
-    // 先发送积累的战斗结果 (含鱼雷伤害/击毁等), 再发送回合结束
-    flushPendingResults(`${gameStore.currentPlayer!.name} 结束回合`, 'system')
-    multiplayerClient.sendEndTurn()
-    multiplayerClient.discardDownTo(ship?.compartments.length ?? 5)
-    return
-  }
   if (gameStore.currentTurnPhase === 'action') {
     gameStore.advancePhase()
   }

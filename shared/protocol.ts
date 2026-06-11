@@ -134,6 +134,8 @@ export interface BattleStateSnapshot {
   torpedoLoaded: Record<string, boolean>
   currentTurnSlot: number
   roundNumber: number
+  winner?: string | null
+  phase?: 'spawn' | 'battle'
 }
 
 // ==================== 工具 ====================
@@ -188,4 +190,32 @@ export function drawFromDeck(
     drawn.push(d.pop()!)
   }
   return { drawn, newDraw: d, newDiscard: disc }
+}
+
+// ==================== 客户端意图 (完全服务器权威) ====================
+
+export type IntentType =
+  | 'spawn'            // 选择出生点
+  | 'endTurn'          // 结束回合
+  | 'playCard'         // 打出卡牌 { cardId }
+  | 'freeMove'         // 自由行动：跑动
+  | 'freeCommand'      // 自由行动：指挥当前舱段
+  | 'freePass'         // 自由行动：传递
+  | 'targetSelection'  // 确认目标
+
+export interface ClientIntent {
+  type: IntentType
+  payload: {
+    shipId?: string
+    compIndex?: number
+    compartmentId?: string
+    fromCompId?: string
+    toCompId?: string
+    sourceCompId?: string
+    targetCompId?: string
+    targetShipId?: string
+    commandId?: string
+    cardId?: string
+    cardIds?: string[]
+  }
 }

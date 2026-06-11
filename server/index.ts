@@ -4,7 +4,7 @@ import { generateRoomCode, buildDeckCards, shuffleCards, drawFromDeck } from '..
 import type { RoomConfig, ShipDesignData, BattleAction, CardData, BattleStateSnapshot } from '../shared/protocol.js'
 import { newRoom, getRoom, getRoomBySocket, setSocketRoom, removeSocketRoom } from './state.js'
 import { buildCombatState, type ServerCombatState } from './combatState.js'
-import { applyCombatResults, tickEffectsState, tickTorpedoesState, tickFightersState, removeFightersByPlayerState, resetPerTurnState } from './combatLogic.js'
+import { applyDamage, handleDestruction, tickEffects, tickTorpedoes, tickFighters, removeFightersByPlayer, resetPerTurn, findShipByComp, findCompartment, addTorpedoSalvo, addFighterToken, addEffect, healCompartment, movePlayer } from './data/CombatState.js'
 
 const httpServer = createServer()
 const io = new Server(httpServer, { cors: { origin: '*' } })
@@ -302,22 +302,44 @@ io.on('connection', (socket) => {
 
     // ===== 逻辑层: 回合结束结算 =====
     if (room.combatState) {
+      const rng = () => Math.floor(Math.random() * 10) + 1
       // 1) tick effects / torpedoes / fighters
-      room.combatState = tickEffectsState(room.combatState)
-      const torpResult = tickTorpedoesState(room.combatState, () => Math.floor(Math.random() * 10) + 1)
+      room.combatState = tickEffects(room.combatState)
+      room.combatState = tickFighters(room.combatState)
+      const torpResult = tickTorpedoes(room.combatState)
       room.combatState = torpResult.state
-      room.combatState = tickFightersState(room.combatState)
+      // 结算鱼雷伤害
+      for (const t of torpResult.resolved) {
+        for (let i = 0; i < t.torpedoCount; i++) {
+          const dmg = rng(10) // 1D10
+          const dmgResult = applyDamage(room.combatState, t.targetCompartmentId, dmg)
+          room.combatState = dmgResult.state
+          const ship = findShipByComp(room.combatState, t.targetCompartmentId)
+          const shipName = ship?.name ?? '?'
+          const comp = findCompartment(room.combatState, t.targetCompartmentId)
+          const entry = {
+            message: `鱼雷 → ${shipName} 第${(comp?.position ?? 0) + 1}舱段 ${dmg}伤害${dmgResult.destroyed ? ' — 击毁!' : ''}`,
+            type: dmgResult.destroyed ? 'destroy' : 'damage',
+            timestamp: Date.now(),
+          }
+          room.battleLog.push(entry)
+          io.to(slot.code).emit('battle:log', entry)
+          if (dmgResult.destroyed) {
+            const dest = handleDestruction(room.combatState, t.targetCompartmentId)
+            room.combatState = dest.state
+            for (const log of dest.logs) {
+              const e = { message: log.message, type: log.type, timestamp: Date.now() }
+              room.battleLog.push(e)
+              io.to(slot.code).emit('battle:log', e)
+            }
+          }
+        }
+      }
       // 2) 移除之前回合玩家派出的战斗机
       const prevTurnSlot = room.currentTurnSlot
-      room.combatState = removeFightersByPlayerState(room.combatState, prevTurnSlot)
+      room.combatState = removeFightersByPlayer(room.combatState, prevTurnSlot)
       // 3) 重置每回合计数器
-      room.combatState = resetPerTurnState(room.combatState)
-      // 广播新增日志 (鱼雷伤害/效果到期等)
-      for (const log of torpResult.logs) {
-        const entry = { message: log.message, type: log.type, timestamp: Date.now() }
-        room.battleLog.push(entry)
-        io.to(slot.code).emit('battle:log', entry)
-      }
+      room.combatState = resetPerTurn(room.combatState)
     }
 
     room.currentTurnSlot = turnOrder[nextIdx]
@@ -346,14 +368,86 @@ io.on('connection', (socket) => {
 
     // ===== 逻辑层: 应用战斗结果到服务端数据层 =====
     if (action.results && action.results.length > 0 && room.combatState) {
-      const d10 = () => Math.floor(Math.random() * 10) + 1
-      const result = applyCombatResults(room.combatState, action.results, slot.slotIndex, d10)
-      room.combatState = result.state
-      // 广播新增日志
-      for (const log of result.logs) {
-        const entry = { message: log.message, type: log.type, timestamp: Date.now() }
-        room.battleLog.push(entry)
-        io.to(slot.code).emit('battle:log', entry)
+      for (const r of action.results) {
+        switch (r.op) {
+          case 'damage': {
+            for (const d of r.damages || []) {
+              const dmgResult = applyDamage(room.combatState, d.compartmentId, d.damage)
+              room.combatState = dmgResult.state
+              const ship = findShipByComp(room.combatState, d.compartmentId)
+              const shipName = ship?.name ?? '?'
+              const comp = findCompartment(room.combatState, d.compartmentId)
+              const msg = `${r.source || '?'} → ${shipName} 第${(comp?.position ?? 0) + 1}舱段 ${d.damage}伤害${dmgResult.destroyed ? ' — 击毁!' : ''}`
+              const type = dmgResult.destroyed ? 'destroy' : 'damage'
+              room.battleLog.push({ message: msg, type, timestamp: Date.now() })
+              io.to(slot.code).emit('battle:log', { message: msg, type, timestamp: Date.now() })
+              if (dmgResult.destroyed) {
+                const dest = handleDestruction(room.combatState, d.compartmentId)
+                room.combatState = dest.state
+                for (const log of dest.logs) {
+                  room.battleLog.push({ message: log.message, type: log.type, timestamp: Date.now() })
+                  io.to(slot.code).emit('battle:log', { message: log.message, type: log.type, timestamp: Date.now() })
+                }
+              }
+            }
+            break
+          }
+          case 'addTorpedo': {
+            if (r.torpSourceCompId && r.torpTargetCompId) {
+              const salvoId = `torp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+              room.combatState = addTorpedoSalvo(room.combatState, {
+                id: salvoId, sourceCompartmentId: r.torpSourceCompId,
+                targetCompartmentId: r.torpTargetCompId, torpedoCount: r.torpCount || 0,
+                remainingTurns: r.torpTurns || 0,
+              })
+              room.battleLog.push({ message: `鱼雷发射! ${r.torpCount || 0}颗, ${r.torpTurns || 0}全回合后到达`, type: 'system', timestamp: Date.now() })
+              io.to(slot.code).emit('battle:log', { message: `鱼雷发射! ${r.torpCount || 0}颗, ${r.torpTurns || 0}全回合后到达`, type: 'system', timestamp: Date.now() })
+            }
+            break
+          }
+          case 'addFighter': {
+            if (r.fighterShipId && r.fighterTeamId && r.fighterCompId) {
+              const tokenId = `fighter_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+              room.combatState = addFighterToken(room.combatState, {
+                id: tokenId, shipId: r.fighterShipId, ownerTeamId: r.fighterTeamId,
+                sourceCompartmentId: r.fighterCompId, sourcePlayerId: String(slot.slotIndex),
+                remainingTurns: r.fighterTurns || 0,
+              })
+              const shipName = room.combatState.ships.find(sh => sh.shipId === r.fighterShipId)?.name ?? r.fighterShipId
+              room.battleLog.push({ message: `战斗机起飞 → ${shipName}, 空优+2`, type: 'effect', timestamp: Date.now() })
+              io.to(slot.code).emit('battle:log', { message: `战斗机起飞 → ${shipName}, 空优+2`, type: 'effect', timestamp: Date.now() })
+            }
+            break
+          }
+          case 'addEffect': {
+            if (r.effectType && r.effectSourceCompId) {
+              const effectId = `effect_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+              room.combatState = addEffect(room.combatState, {
+                id: effectId, effectType: r.effectType === 'smoke_short' ? 'smoke_short' : 'smoke_long',
+                sourceCompartmentId: r.effectSourceCompId, affectedCompartmentIds: r.effectAffectedCompIds || [],
+                remainingTurns: r.effectTurns || 0,
+              })
+              const shortLabel = r.effectType === 'smoke_short' ? '半' : '全'
+              room.battleLog.push({ message: `烟幕 (${shortLabel}回合): ${r.effectTurns}回合`, type: 'effect', timestamp: Date.now() })
+              io.to(slot.code).emit('battle:log', { message: `烟幕 (${shortLabel}回合): ${r.effectTurns}回合`, type: 'effect', timestamp: Date.now() })
+            }
+            break
+          }
+          case 'compHeal': {
+            if (r.healCompId) {
+              room.combatState = healCompartment(room.combatState, r.healCompId, r.healAmount || 0)
+              room.battleLog.push({ message: `维修 HP+${r.healAmount}`, type: 'effect', timestamp: Date.now() })
+              io.to(slot.code).emit('battle:log', { message: `维修 HP+${r.healAmount}`, type: 'effect', timestamp: Date.now() })
+            }
+            break
+          }
+          case 'move': {
+            if (r.toCompIdx != null && room.combatState.playerPositions[slot.slotIndex]) {
+              room.combatState = movePlayer(room.combatState, slot.slotIndex, room.combatState.playerPositions[slot.slotIndex].shipId, r.toCompIdx)
+            }
+            break
+          }
+        }
       }
     }
 

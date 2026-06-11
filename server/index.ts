@@ -307,59 +307,88 @@ io.on('connection', (socket) => {
   })
 
   // ===================== 卡牌操作 (服务端管理牌堆) =====================
-  socket.on('card:draw', ({ count }) => {
+  // 回合开始抽牌 (服务端权威: 计算舱段drawValue + 第一轮补偿)
+  socket.on('card:drawPhase', () => {
     const slot = getMySlot(socket.id)
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
     if (room.currentTurnSlot !== slot.slotIndex) return
-    // 服务端权威：计算当前舱段抽牌数 = 舱段drawValue + 第一轮补偿
-    let drawCount = 0
     const cs = room.combatState
-    if (cs) {
-      const pos = cs.playerPositions[slot.slotIndex]
-      if (pos) {
-        const ship = cs.ships.find(sh => sh.shipId === pos.shipId)
-        const comp = ship?.compartments.find(c => c.position === pos.compIndex)
-        if (comp && comp.equipmentType && !comp.isDestroyed) {
-          // 舱段抽牌值（从规则书提取，避免跨层import registry）
-          const compDrawMap: Record<string, number> = {
-            dormitory: 4, comms_hub: 3,
-            ammo_depot: 2, fire_control: 2, afterburner: 2, depth_charge: 2, aa_gun: 2, integrated_command: 2,
-          }
-          drawCount = compDrawMap[comp.equipmentType] ?? 1
-        } else {
-          drawCount = 1 // 被毁/空舱段: 基础1张
-        }
-        // 第一轮补偿
-        const compensation = cs.firstRoundCompensation[slot.slotIndex] ?? 0
-        if (room.roundNumber === 1 && compensation > 0) {
-          drawCount += compensation
-          const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
-          io.to(slot.code).emit('battle:log', {
-            message: `${playerName} 第一轮后攻补偿 +${compensation}张`,
-            type: 'system', timestamp: Date.now(),
-          })
-        }
-      } else {
-        drawCount = 2 // fallback
+    if (!cs) return
+    const pos = cs.playerPositions[slot.slotIndex]
+    if (!pos) return
+
+    let drawCount = 0
+    const ship = cs.ships.find(sh => sh.shipId === pos.shipId)
+    const comp = ship?.compartments.find(c => c.position === pos.compIndex)
+    if (comp && comp.equipmentType && !comp.isDestroyed) {
+      const drawMap: Record<string, number> = {
+        dormitory: 4, comms_hub: 3,
+        ammo_depot: 2, fire_control: 2, afterburner: 2, depth_charge: 2, aa_gun: 2, integrated_command: 2,
       }
+      drawCount = drawMap[comp.equipmentType] ?? 1
     } else {
-      drawCount = count || 2 // fallback: 用客户端传来的值
+      drawCount = 1
     }
-    const { drawn, newDraw, newDiscard } = drawFromDeck(room.drawPile, room.discardPile, drawCount)
-    room.drawPile = newDraw
-    room.discardPile = newDiscard
+    // 第一轮补偿
+    const compensation = cs.firstRoundCompensation[slot.slotIndex] ?? 0
+    if (room.roundNumber === 1 && compensation > 0) {
+      drawCount += compensation
+      io.to(slot.code).emit('battle:log', {
+        message: `${room.state.slots[slot.slotIndex]?.playerName} 第一轮后攻补偿 +${compensation}张`,
+        type: 'system', timestamp: Date.now(),
+      })
+    }
+
+    const result = drawFromDeck(room.drawPile, room.discardPile, drawCount)
+    room.drawPile = result.newDraw
+    room.discardPile = result.newDiscard
     const hand = room.playerHands.get(slot.slotIndex) || []
-    hand.push(...drawn)
+    hand.push(...result.drawn)
     room.playerHands.set(slot.slotIndex, hand)
-    // 只发给当前玩家 (手牌隐私)
-    socket.emit('card:drawn', { cards: drawn, hand: hand })
-    const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
+    socket.emit('card:drawn', { cards: result.drawn, hand: hand })
     io.to(slot.code).emit('battle:log', {
-      message: `${playerName} 抽了 ${drawn.length} 张牌`,
+      message: `${room.state.slots[slot.slotIndex]?.playerName || '?'} 抽了 ${result.drawn.length} 张牌`,
       type: 'system', timestamp: Date.now(),
     })
+  })
+
+  // ===== 使用手牌 (区别于回合结束弃牌) =====
+  socket.on('card:play', ({ cardId }) => {
+    const slot = getMySlot(socket.id)
+    if (!slot) return
+    const room = getRoom(slot.code)
+    if (!room || room.state.phase !== 'battle') return
+    if (room.currentTurnSlot !== slot.slotIndex) return
+    const hand = room.playerHands.get(slot.slotIndex) || []
+    const idx = hand.findIndex((c: CardData) => c.id === cardId)
+    if (idx === -1) return
+    const [card] = hand.splice(idx, 1)
+    room.discardPile.push(card)
+    room.playerHands.set(slot.slotIndex, hand)
+    socket.emit('card:drawn', { cards: [], hand: hand })
+    const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
+    const cardTypeNames: Record<string, string> = { move: '移动', command: '指挥', action: '行动', coffee: '咖啡', scheme: '谋划' }
+    const typeName = cardTypeNames[card.type] || card.type
+    io.to(slot.code).emit('battle:log', {
+      message: `${playerName} 使用 [${typeName}] 手牌`,
+      type: 'system', timestamp: Date.now(),
+    })
+
+    // 咖啡效果: 抽2张
+    if (card.type === 'coffee') {
+      const result = drawFromDeck(room.drawPile, room.discardPile, 2)
+      room.drawPile = result.newDraw
+      room.discardPile = result.newDiscard
+      hand.push(...result.drawn)
+      room.playerHands.set(slot.slotIndex, hand)
+      socket.emit('card:drawn', { cards: result.drawn, hand: hand })
+      io.to(slot.code).emit('battle:log', {
+        message: `${playerName} 使用咖啡，抽2张牌`,
+        type: 'system', timestamp: Date.now(),
+      })
+    }
   })
 
   socket.on('card:discard', ({ cardIds }) => {
@@ -367,6 +396,7 @@ io.on('connection', (socket) => {
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room) return
+    if (room.currentTurnSlot !== slot.slotIndex) return
     const hand = room.playerHands.get(slot.slotIndex) || []
     const discarded: CardData[] = []
     for (const cid of (cardIds || [])) {
@@ -379,11 +409,6 @@ io.on('connection', (socket) => {
     }
     room.playerHands.set(slot.slotIndex, hand)
     socket.emit('card:drawn', { cards: [], hand: hand })
-    const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
-    io.to(slot.code).emit('battle:log', {
-      message: `${playerName} 弃了 ${discarded.length} 张牌`,
-      type: 'system', timestamp: Date.now(),
-    })
   })
 
   socket.on('card:discardDownTo', ({ maxCards }) => {

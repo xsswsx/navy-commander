@@ -114,3 +114,83 @@ describe('movePlayer', () => {
     expect(result.playerPositions[0].compIndex).toBe(2)
   })
 })
+
+describe('addTorpedoSalvo', () => {
+  it('adds a torpedo salvo to the state', async () => {
+    const { addTorpedoSalvo } = await import('../../data/CombatState.js')
+    const state: any = makeTestState()
+    const salvo = {
+      id: 't1', sourceCompartmentId: 'teamA_s0_comp_0',
+      targetCompartmentId: 'teamB_s0_comp_0', torpedoCount: 4, remainingTurns: 3,
+    }
+    const result = addTorpedoSalvo(state, salvo)
+    expect(result.torpedoSalvoes).toHaveLength(1)
+    expect(result.torpedoSalvoes[0].torpedoCount).toBe(4)
+  })
+})
+
+describe('tickTorpedoes', () => {
+  it('decrements turns and resolves expired salvoes', async () => {
+    const { tickTorpedoes } = await import('../../data/CombatState.js')
+    const state: any = makeTestState()
+    state.torpedoSalvoes = [{
+      id: 't1', sourceCompartmentId: 'teamA_s0_comp_0',
+      targetCompartmentId: 'teamB_s0_comp_0', torpedoCount: 2, remainingTurns: 1,
+    }]
+    const result = tickTorpedoes(state)
+    expect(result.resolved).toHaveLength(1)
+    expect(result.state.torpedoSalvoes).toHaveLength(0)
+  })
+
+  it('keeps salvoes with remaining turns > 0', async () => {
+    const { tickTorpedoes } = await import('../../data/CombatState.js')
+    const state: any = makeTestState()
+    state.torpedoSalvoes = [{
+      id: 't1', sourceCompartmentId: 'c1',
+    targetCompartmentId: 'c2', torpedoCount: 2, remainingTurns: 3,
+    }]
+    const result = tickTorpedoes(state)
+    expect(result.resolved).toHaveLength(0)
+    expect(result.state.torpedoSalvoes).toHaveLength(1)
+    expect(result.state.torpedoSalvoes[0].remainingTurns).toBe(2)
+  })
+})
+
+describe('addFighterToken / tickFighters / removeFightersByPlayer', () => {
+  it('full lifecycle: add, tick, remove by player', async () => {
+    const { addFighterToken, tickFighters, removeFightersByPlayer } = await import('../../data/CombatState.js')
+    const state: any = makeTestState()
+    const token = {
+      id: 'f1', shipId: 'teamA_s0', ownerTeamId: 'teamA',
+      sourceCompartmentId: 'teamA_s0_comp_0', sourcePlayerId: '0', remainingTurns: 2,
+    }
+    let s = addFighterToken(state, token)
+    expect(s.fighterTokens).toHaveLength(1)
+
+    s = tickFighters(s)
+    expect(s.fighterTokens[0].remainingTurns).toBe(1)
+
+    s = removeFightersByPlayer(s, 0)
+    expect(s.fighterTokens).toHaveLength(0)
+  })
+})
+
+describe('addEffect / tickEffects', () => {
+  it('adds effect and decrements remaining turns', async () => {
+    const { addEffect, tickEffects } = await import('../../data/CombatState.js')
+    const state: any = makeTestState()
+    const effect = {
+      id: 'e1', effectType: 'smoke_short' as const,
+      sourceCompartmentId: 'teamA_s0_comp_0', affectedCompartmentIds: ['teamA_s0_comp_0', 'teamA_s0_comp_1'],
+      remainingTurns: 2,
+    }
+    let s = addEffect(state, effect)
+    expect(s.activeEffects).toHaveLength(1)
+
+    s = tickEffects(s)
+    expect(s.activeEffects[0].remainingTurns).toBe(1)
+
+    s = tickEffects(s)
+    expect(s.activeEffects).toHaveLength(0)
+  })
+})

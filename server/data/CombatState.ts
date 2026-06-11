@@ -119,5 +119,77 @@ export function resetPerTurn(state: ServerCombatState): ServerCombatState {
   return s
 }
 
+// ===== Torpedo =====
+
+export function addTorpedoSalvo(
+  state: ServerCombatState, salvo: ServerTorpedoSalvo
+): ServerCombatState {
+  const s = clone(state)
+  s.torpedoSalvoes.push({ ...salvo })
+  return s
+}
+
+export interface TickTorpedoResult {
+  state: ServerCombatState
+  resolved: ServerTorpedoSalvo[]
+}
+
+export function tickTorpedoes(state: ServerCombatState): TickTorpedoResult {
+  const s = clone(state)
+  const resolved: ServerTorpedoSalvo[] = []
+  s.torpedoSalvoes = s.torpedoSalvoes.filter(t => {
+    t.remainingTurns--
+    if (t.remainingTurns <= 0) { resolved.push(t); return false }
+    return true
+  })
+  return { state: s, resolved }
+}
+
+// ===== Fighter =====
+
+export function addFighterToken(
+  state: ServerCombatState, token: ServerFighterToken
+): ServerCombatState {
+  const s = clone(state)
+  s.fighterTokens.push({ ...token })
+  return s
+}
+
+export function tickFighters(state: ServerCombatState): ServerCombatState {
+  const s = clone(state)
+  for (const f of s.fighterTokens) {
+    if (f.remainingTurns > 0) f.remainingTurns--
+  }
+  s.fighterTokens = s.fighterTokens.filter(f => f.remainingTurns > 0)
+  return s
+}
+
+export function removeFightersByPlayer(
+  state: ServerCombatState, slotIndex: number
+): ServerCombatState {
+  const s = clone(state)
+  s.fighterTokens = s.fighterTokens.filter(f => f.sourcePlayerId !== String(slotIndex))
+  return s
+}
+
+// ===== Effects =====
+
+export function addEffect(
+  state: ServerCombatState, effect: ServerActiveEffect
+): ServerCombatState {
+  const s = clone(state)
+  s.activeEffects.push({ ...effect })
+  return s
+}
+
+export function tickEffects(state: ServerCombatState): ServerCombatState {
+  const s = clone(state)
+  s.activeEffects = s.activeEffects.filter(e => {
+    e.remainingTurns--
+    return e.remainingTurns > 0
+  })
+  return s
+}
+
 // Re-export types for convenience
 export type { ServerCombatState, ServerCompartment, ServerShip, ServerFighterToken, ServerTorpedoSalvo, ServerActiveEffect }

@@ -1,7 +1,7 @@
 // server/logic/handlers/freeMoveHandler.ts
 import type { ServerRoom } from '../../state.js'
 import type { ClientIntent } from '../../../shared/protocol.js'
-import type { ServerCombatState } from '../../combatState.js'
+import type { ServerCombatState } from '../../data/CombatState.js'
 import { movePlayer, findShip, getCompartmentByPosition } from '../../data/CombatState.js'
 
 const FREE_MOVE_RANGE = 2

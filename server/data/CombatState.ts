@@ -290,14 +290,22 @@ export function canUseAmmoDepot(
   return !state.ammoDepotUsed[compId]
 }
 
-export function getRandomLivingCompartment(
+/** 获取船上的存活舱段列表 (纯查询, 不含随机) */
+export function getLivingCompartments(
   state: ServerCombatState, shipId: string
-): ServerCompartment | null {
+): ServerCompartment[] {
   const ship = findShip(state, shipId)
-  if (!ship) return null
-  const living = ship.compartments.filter(c => !c.isDestroyed)
+  if (!ship) return []
+  return ship.compartments.filter(c => !c.isDestroyed)
+}
+
+/** 按索引获取存活舱段 (逻辑层负责随机; 数据层保持确定) */
+export function getLivingCompartmentByIndex(
+  state: ServerCombatState, shipId: string, index: number
+): ServerCompartment | null {
+  const living = getLivingCompartments(state, shipId)
   if (living.length === 0) return null
-  return living[Math.floor(Math.random() * living.length)]
+  return living[index % living.length] ?? null
 }
 
 // ===== Destruction =====

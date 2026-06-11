@@ -8,7 +8,7 @@ import {
   addFighterToken, addEffect, healCompartment, findShipByComp,
   getAdjacentComps, isCompartmentSmoked, isTorpedoLoaded,
   canUseAmmoDepot, findCompartment, findShip,
-  getRandomLivingCompartment, isShipSunk,
+  getLivingCompartments, getLivingCompartmentByIndex, isShipSunk,
 } from '../../data/CombatState.js'
 import { getEquipment } from '../../../src/game/equipment/registry.js'
 import type { DiceRng } from '../rules/dice.js'
@@ -77,8 +77,9 @@ export function handleCommand(
             logs.push({ message: `[盲射#${a + 1} D8=${d8}] ${eqDef.name} 未命中!`, type: 'info' })
             continue
           }
-          const hitComp = getRandomLivingCompartment(s, targetShipId)
-          if (!hitComp) continue
+          const living = getLivingCompartments(s, targetShipId)
+          if (living.length === 0) continue
+          const hitComp = living[rng(living.length) - 1]
           const dmg = rollGunDamage(rng, eqType as 'dual_cannon' | 'triple_cannon')
           totalDmg += dmg
           const dmgResult = applyDamage(s, hitComp.compId, dmg)
@@ -206,8 +207,9 @@ export function handleCommand(
       } else if (commandId.includes('bomber') && !commandId.includes('torpedo')) {
         const nfa = calculateAirSuperiority(s, aircraftTargetShipId, room.state.slots[slotIndex]?.teamId || '')
         const dmg = rollBomberDamage(rng, nfa)
-        const hitComp = getRandomLivingCompartment(s, aircraftTargetShipId)
-        if (hitComp) {
+        const bombingLiving = getLivingCompartments(s, aircraftTargetShipId)
+        if (bombingLiving.length > 0) {
+          const hitComp = bombingLiving[rng(bombingLiving.length) - 1]
           const dmgResult = applyDamage(s, hitComp.compId, dmg)
           s = dmgResult.state
           const targetShipName = findShipByComp(s, hitComp.compId)?.name ?? aircraftTargetShipId
@@ -222,8 +224,9 @@ export function handleCommand(
       } else if (commandId.includes('torpedo')) {
         const nfa = calculateAirSuperiority(s, aircraftTargetShipId, room.state.slots[slotIndex]?.teamId || '')
         const dmg = rollTorpedoBomberDamage(rng, nfa)
-        const hitComp = getRandomLivingCompartment(s, aircraftTargetShipId)
-        if (hitComp) {
+        const torpLiving = getLivingCompartments(s, aircraftTargetShipId)
+        if (torpLiving.length > 0) {
+          const hitComp = torpLiving[rng(torpLiving.length) - 1]
           const dmgResult = applyDamage(s, hitComp.compId, dmg)
           s = dmgResult.state
           const targetShipName = findShipByComp(s, hitComp.compId)?.name ?? aircraftTargetShipId
@@ -299,7 +302,7 @@ export function handleCommand(
         const originalCount = t.torpedoCount
         for (let i = 0; i < originalCount; i++) {
           totalCount++
-          if (Math.random() < 0.5) { t.torpedoCount--; totalNegated++ }
+          if (rng(2) === 1) { t.torpedoCount--; totalNegated++ }
         }
       }
       s.torpedoSalvoes = s.torpedoSalvoes.filter(t => t.torpedoCount > 0)

@@ -906,10 +906,14 @@ function executeTargetedCommand(
   // 多人模式: 服务器权威, 发送意图后短接, 不本地执行
   if (isMP.value) {
     multiplayerClient.discardCards(uiStore.selectedCardIds)
-    multiplayerClient.sendIntent({
-      type: 'targetSelection',
-      payload: { sourceCompId: comp.id, targetCompId: targetId, commandId: cmdId },
-    })
+    const payload: any = { sourceCompId: comp.id, commandId: cmdId }
+    // 根据当前 UI 瞄准模式决定发送 compartment ID 还是 ship ID
+    if (uiStore.battleState === 'targeting_ship') {
+      payload.targetShipId = targetId
+    } else {
+      payload.targetCompId = targetId
+    }
+    multiplayerClient.sendIntent({ type: 'targetSelection', payload })
     return
   }
 

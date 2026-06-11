@@ -404,17 +404,6 @@ io.on('connection', (socket) => {
     })
   })
 
-  // ===================== 战斗日志 =====================
-  socket.on('battle:log', ({ message, type }) => {
-    const slot = getMySlot(socket.id)
-    if (!slot) return
-    const room = getRoom(slot.code)
-    if (!room) return
-    const entry = { message, type: type || 'info', timestamp: Date.now() }
-    room.battleLog.push(entry)
-    io.to(slot.code).emit('battle:log', entry)
-  })
-
   // ===================== 断开 =====================
   socket.on('disconnect', () => {
     const prev = getMySlot(socket.id)

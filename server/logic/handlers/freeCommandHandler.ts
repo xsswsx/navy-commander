@@ -1,7 +1,7 @@
 // server/logic/handlers/freeCommandHandler.ts
 import type { ServerRoom } from '../../state.js'
 import type { ClientIntent } from '../../../shared/protocol.js'
-import type { ServerCombatState } from '../../combatState.js'
+import type { ServerCombatState } from '../../data/CombatState.js'
 import { findShip, getCompartmentByPosition, getCommandsUsed } from '../../data/CombatState.js'
 import { getEquipment } from '../../../src/game/equipment/registry.js'
 
@@ -56,7 +56,7 @@ export function handleFreeCommand(
     return { newState: state, logs }
   }
 
-  const eqDef = getEquipment(comp.equipmentType)
+  const eqDef = getEquipment(comp.equipmentType as any)
 
   // 检查指挥次数
   if (eqDef.commandsPerTurn > 0) {

@@ -1,16 +1,21 @@
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { generateRoomCode, buildDeckCards, shuffleCards, drawFromDeck } from '../shared/protocol.js'
-import type { RoomConfig, ShipDesignData, BattleAction, CardData, BattleStateSnapshot } from '../shared/protocol.js'
+import type { RoomConfig, ShipDesignData, CardData, ClientIntent } from '../shared/protocol.js'
 import { newRoom, getRoom, getRoomBySocket, setSocketRoom, removeSocketRoom } from './state.js'
-import { buildCombatState, type ServerCombatState } from './combatState.js'
-import { applyDamage, handleDestruction, tickEffects, tickTorpedoes, tickFighters, removeFightersByPlayer, resetPerTurn, findShipByComp, findCompartment, addTorpedoSalvo, addFighterToken, addEffect, healCompartment, movePlayer } from './data/CombatState.js'
+import { buildCombatState } from './combatState.js'
+import { handleIntent } from './logic/intentRouter.js'
+import { createRng } from './logic/rules/dice.js'
+import { FullSnapshotDisplay } from './display/FullSnapshotDisplay.js'
 
 const httpServer = createServer()
 const io = new Server(httpServer, { cors: { origin: '*' } })
 
 // 监听每个玩家在每个房间的槽位 → 用于权限判断
 const socketSlotMap = new Map<string, { code: string; slotIndex: number }>()
+
+// 显示层实例
+const display = new FullSnapshotDisplay({ io })
 
 function getMySlot(socketId: string): { code: string; slotIndex: number } | null {
   return socketSlotMap.get(socketId) ?? null
@@ -223,58 +228,30 @@ io.on('connection', (socket) => {
     })
   })
 
-  // 出生阶段
+  // 出生阶段 (三层架构: 逻辑层处理)
   socket.on('battle:spawn', ({ compartmentId, shipId }) => {
     const slot = getMySlot(socket.id)
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
-    // 按顺序选择出生点
-    const currentSpawnSlot = room.spawnOrder[room.spawnIndex]
-    if (currentSpawnSlot !== undefined && slot.slotIndex !== currentSpawnSlot) {
-      socket.emit('error', { message: '还没轮到你选出生点' })
-      return
-    }
-    // 防止重复选择
-    if (room.spawns.has(slot.slotIndex)) return
-    // 计算舱段索引: 从 deterministic compId 提取 position
-    const compMatch = compartmentId.match(/_comp_(\d+)$/)
-    const compIndex = compMatch ? parseInt(compMatch[1]) : 0
-    room.spawns.set(slot.slotIndex, { shipId: shipId || '', compIndex })
-    room.spawnIndex++
+    if (!room.combatState) return
 
-    // 更新服务端数据层
-    if (room.combatState) {
-      room.combatState.playerPositions[slot.slotIndex] = { shipId: shipId || '', compIndex }
-    }
+    const result = handleIntent(room.combatState, room, slot.slotIndex, {
+      type: 'spawn',
+      payload: { compartmentId, shipId },
+    }, createRng())
 
-    const logMsg = `${room.state.slots[slot.slotIndex]?.playerName || '?'} 选择出生点`
-    room.battleLog.push({ message: logMsg, type: 'system', timestamp: Date.now() })
-    io.to(slot.code).emit('battle:action', {
-      type: 'selectSpawn', compartmentId,
-      senderSlotIndex: slot.slotIndex,
-      logMessage: logMsg, logType: 'system',
-    })
-    io.to(slot.code).emit('battle:log', { message: logMsg, type: 'system', timestamp: Date.now() })
+    room.combatState = result.newState
+    display.pushFullState(slot.code, room.combatState, room)
+    display.pushLogs(slot.code, result.logs)
 
-    // 检查所有人是否都已选择
-    const occ = occupiedSlots(room)
-    const allSpawned = occ.every(idx => room.spawns.has(idx))
-    if (allSpawned) {
-      const turnOrder = room.lastBattleInit?.turnOrder || occ
-      room.currentTurnSlot = turnOrder[0]
-      const payload = { playerSlotIndex: turnOrder[0], roundNumber: room.roundNumber }
-
-      // 显示层: 推送全量状态快照
-      const spawnSnapshot = getBattleStateSnapshot(room)
-      io.to(slot.code).emit('battle:state', spawnSnapshot)
-
-      console.log(`[battle:spawn] all spawned → turn slot ${turnOrder[0]}`)
-      io.to(slot.code).emit('battle:turn', payload)
-    } else {
-      // 每次出生也推送状态更新
-      const spawnSnapshot = getBattleStateSnapshot(room)
-      io.to(slot.code).emit('battle:state', spawnSnapshot)
+    if (result.turnChange) {
+      room.currentTurnSlot = result.turnChange.nextSlot
+      room.roundNumber = result.turnChange.newRound
+      display.pushEvent(slot.code, 'battle:turn', {
+        playerSlotIndex: result.turnChange.nextSlot,
+        roundNumber: result.turnChange.newRound,
+      })
     }
   })
 
@@ -283,184 +260,49 @@ io.on('connection', (socket) => {
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
-    if (room.currentTurnSlot !== slot.slotIndex) return
-    const turnOrder = room.lastBattleInit?.turnOrder || occupiedSlots(room)
-    const curIdx = turnOrder.indexOf(room.currentTurnSlot)
-    if (curIdx < 0) return
-    // 跳过已断线/出局的槽位
-    let nextIdx = (curIdx + 1) % turnOrder.length
-    let safety = 0
-    while (safety < turnOrder.length) {
-      const checkSlot = turnOrder[nextIdx]
-      const s = room.state.slots[checkSlot]
-      if (s && s.playerName && s.socketId) break  // 活跃玩家
-      nextIdx = (nextIdx + 1) % turnOrder.length
-      safety++
+    if (!room.combatState) return
+
+    const result = handleIntent(room.combatState, room, slot.slotIndex, {
+      type: 'endTurn',
+      payload: {},
+    }, createRng())
+
+    room.combatState = result.newState
+    room.currentTurnSlot = result.turnChange?.nextSlot ?? room.currentTurnSlot
+    room.roundNumber = result.turnChange?.newRound ?? room.roundNumber
+    if (result.winner) room.winner = result.winner
+
+    display.pushFullState(slot.code, room.combatState, room)
+    display.pushLogs(slot.code, result.logs)
+    display.pushEvent(slot.code, 'battle:turn', {
+      playerSlotIndex: room.currentTurnSlot,
+      roundNumber: room.roundNumber,
+    })
+    if (result.winner) {
+      console.log(`[battle:end] ${slot.code} winner=${result.winner}`)
+      display.pushEvent(slot.code, 'battle:end', { winner: result.winner })
     }
-    // 检测回合数变化 (绕回一圈 → 新回合)
-    if (nextIdx <= curIdx) room.roundNumber++
-
-    // ===== 逻辑层: 回合结束结算 =====
-    if (room.combatState) {
-      const rng = () => Math.floor(Math.random() * 10) + 1
-      // 1) tick effects / torpedoes / fighters
-      room.combatState = tickEffects(room.combatState)
-      room.combatState = tickFighters(room.combatState)
-      const torpResult = tickTorpedoes(room.combatState)
-      room.combatState = torpResult.state
-      // 结算鱼雷伤害
-      for (const t of torpResult.resolved) {
-        for (let i = 0; i < t.torpedoCount; i++) {
-          const dmg = rng(10) // 1D10
-          const dmgResult = applyDamage(room.combatState, t.targetCompartmentId, dmg)
-          room.combatState = dmgResult.state
-          const ship = findShipByComp(room.combatState, t.targetCompartmentId)
-          const shipName = ship?.name ?? '?'
-          const comp = findCompartment(room.combatState, t.targetCompartmentId)
-          const entry = {
-            message: `鱼雷 → ${shipName} 第${(comp?.position ?? 0) + 1}舱段 ${dmg}伤害${dmgResult.destroyed ? ' — 击毁!' : ''}`,
-            type: dmgResult.destroyed ? 'destroy' : 'damage',
-            timestamp: Date.now(),
-          }
-          room.battleLog.push(entry)
-          io.to(slot.code).emit('battle:log', entry)
-          if (dmgResult.destroyed) {
-            const dest = handleDestruction(room.combatState, t.targetCompartmentId)
-            room.combatState = dest.state
-            for (const log of dest.logs) {
-              const e = { message: log.message, type: log.type, timestamp: Date.now() }
-              room.battleLog.push(e)
-              io.to(slot.code).emit('battle:log', e)
-            }
-          }
-        }
-      }
-      // 2) 移除之前回合玩家派出的战斗机
-      const prevTurnSlot = room.currentTurnSlot
-      room.combatState = removeFightersByPlayer(room.combatState, prevTurnSlot)
-      // 3) 重置每回合计数器
-      room.combatState = resetPerTurn(room.combatState)
-    }
-
-    room.currentTurnSlot = turnOrder[nextIdx]
-    const payload = { playerSlotIndex: room.currentTurnSlot, roundNumber: room.roundNumber }
-    io.to(slot.code).emit('battle:turn', payload)
-    const playerName = room.state.slots[room.currentTurnSlot]?.playerName || '?'
-    const logMsg = `--- ${playerName} 的回合 (第${room.roundNumber}轮) ---`
-    room.battleLog.push({ message: logMsg, type: 'system', timestamp: Date.now() })
-    io.to(slot.code).emit('battle:log', { message: logMsg, type: 'system', timestamp: Date.now() })
-
-    // ===== 显示层: 推送全量状态快照 =====
-    const endTurnSnapshot = getBattleStateSnapshot(room)
-    io.to(slot.code).emit('battle:state', endTurnSnapshot)
-
-    console.log(`[battle:turn] ${slot.code} → slot ${room.currentTurnSlot} (round ${room.roundNumber})`)
   })
 
-  socket.on('battle:action', (action: BattleAction) => {
+  // ===== 战斗意图 (完全服务器权威) =====
+  socket.on('battle:intent', (intent: ClientIntent) => {
     const slot = getMySlot(socket.id)
     if (!slot) return
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
-    // 校验: 只有当前回合槽位可以发送行动 (出生阶段允许 spawn)
-    if (action.type !== 'selectSpawn' && room.currentTurnSlot !== slot.slotIndex) return
-    action.senderSlotIndex = slot.slotIndex
+    if (!room.combatState) return
 
-    // ===== 逻辑层: 应用战斗结果到服务端数据层 =====
-    if (action.results && action.results.length > 0 && room.combatState) {
-      for (const r of action.results) {
-        switch (r.op) {
-          case 'damage': {
-            for (const d of r.damages || []) {
-              const dmgResult = applyDamage(room.combatState, d.compartmentId, d.damage)
-              room.combatState = dmgResult.state
-              const ship = findShipByComp(room.combatState, d.compartmentId)
-              const shipName = ship?.name ?? '?'
-              const comp = findCompartment(room.combatState, d.compartmentId)
-              const msg = `${r.source || '?'} → ${shipName} 第${(comp?.position ?? 0) + 1}舱段 ${d.damage}伤害${dmgResult.destroyed ? ' — 击毁!' : ''}`
-              const type = dmgResult.destroyed ? 'destroy' : 'damage'
-              room.battleLog.push({ message: msg, type, timestamp: Date.now() })
-              io.to(slot.code).emit('battle:log', { message: msg, type, timestamp: Date.now() })
-              if (dmgResult.destroyed) {
-                const dest = handleDestruction(room.combatState, d.compartmentId)
-                room.combatState = dest.state
-                for (const log of dest.logs) {
-                  room.battleLog.push({ message: log.message, type: log.type, timestamp: Date.now() })
-                  io.to(slot.code).emit('battle:log', { message: log.message, type: log.type, timestamp: Date.now() })
-                }
-              }
-            }
-            break
-          }
-          case 'addTorpedo': {
-            if (r.torpSourceCompId && r.torpTargetCompId) {
-              const salvoId = `torp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-              room.combatState = addTorpedoSalvo(room.combatState, {
-                id: salvoId, sourceCompartmentId: r.torpSourceCompId,
-                targetCompartmentId: r.torpTargetCompId, torpedoCount: r.torpCount || 0,
-                remainingTurns: r.torpTurns || 0,
-              })
-              room.battleLog.push({ message: `鱼雷发射! ${r.torpCount || 0}颗, ${r.torpTurns || 0}全回合后到达`, type: 'system', timestamp: Date.now() })
-              io.to(slot.code).emit('battle:log', { message: `鱼雷发射! ${r.torpCount || 0}颗, ${r.torpTurns || 0}全回合后到达`, type: 'system', timestamp: Date.now() })
-            }
-            break
-          }
-          case 'addFighter': {
-            if (r.fighterShipId && r.fighterTeamId && r.fighterCompId) {
-              const tokenId = `fighter_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-              room.combatState = addFighterToken(room.combatState, {
-                id: tokenId, shipId: r.fighterShipId, ownerTeamId: r.fighterTeamId,
-                sourceCompartmentId: r.fighterCompId, sourcePlayerId: String(slot.slotIndex),
-                remainingTurns: r.fighterTurns || 0,
-              })
-              const shipName = room.combatState.ships.find(sh => sh.shipId === r.fighterShipId)?.name ?? r.fighterShipId
-              room.battleLog.push({ message: `战斗机起飞 → ${shipName}, 空优+2`, type: 'effect', timestamp: Date.now() })
-              io.to(slot.code).emit('battle:log', { message: `战斗机起飞 → ${shipName}, 空优+2`, type: 'effect', timestamp: Date.now() })
-            }
-            break
-          }
-          case 'addEffect': {
-            if (r.effectType && r.effectSourceCompId) {
-              const effectId = `effect_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-              room.combatState = addEffect(room.combatState, {
-                id: effectId, effectType: r.effectType === 'smoke_short' ? 'smoke_short' : 'smoke_long',
-                sourceCompartmentId: r.effectSourceCompId, affectedCompartmentIds: r.effectAffectedCompIds || [],
-                remainingTurns: r.effectTurns || 0,
-              })
-              const shortLabel = r.effectType === 'smoke_short' ? '半' : '全'
-              room.battleLog.push({ message: `烟幕 (${shortLabel}回合): ${r.effectTurns}回合`, type: 'effect', timestamp: Date.now() })
-              io.to(slot.code).emit('battle:log', { message: `烟幕 (${shortLabel}回合): ${r.effectTurns}回合`, type: 'effect', timestamp: Date.now() })
-            }
-            break
-          }
-          case 'compHeal': {
-            if (r.healCompId) {
-              room.combatState = healCompartment(room.combatState, r.healCompId, r.healAmount || 0)
-              room.battleLog.push({ message: `维修 HP+${r.healAmount}`, type: 'effect', timestamp: Date.now() })
-              io.to(slot.code).emit('battle:log', { message: `维修 HP+${r.healAmount}`, type: 'effect', timestamp: Date.now() })
-            }
-            break
-          }
-          case 'move': {
-            if (r.toCompIdx != null && room.combatState.playerPositions[slot.slotIndex]) {
-              room.combatState = movePlayer(room.combatState, slot.slotIndex, room.combatState.playerPositions[slot.slotIndex].shipId, r.toCompIdx)
-            }
-            break
-          }
-        }
-      }
-    }
+    const result = handleIntent(room.combatState, room, slot.slotIndex, intent, createRng())
 
-    // ===== 显示层: 推送全量状态快照到所有客户端 =====
-    const snapshot = getBattleStateSnapshot(room)
-    io.to(slot.code).emit('battle:state', snapshot)
+    room.combatState = result.newState
+    if (result.winner) room.winner = result.winner
 
-    // 保留原有 action 转发 (用于客户端 UI 反馈, 如目标选择)
-    io.to(slot.code).emit('battle:action', action)
-    if (action.logMessage) {
-      const entry = { message: action.logMessage, type: action.logType || 'info', timestamp: Date.now() }
-      room.battleLog.push(entry)
-      io.to(slot.code).emit('battle:log', entry)
+    display.pushFullState(slot.code, room.combatState, room)
+    display.pushLogs(slot.code, result.logs)
+
+    if (result.winner) {
+      console.log(`[battle:end] ${slot.code} winner=${result.winner}`)
+      display.pushEvent(slot.code, 'battle:end', { winner: result.winner })
     }
   })
 
@@ -607,28 +449,6 @@ function occupiedSlots(room: ReturnType<typeof getRoom>): number[] {
   return room.state.slots.filter(s => s.playerName).map(s => s.index).sort((a, b) => a - b)
 }
 
-/** 生成全量战斗状态快照 (显示层) */
-function getBattleStateSnapshot(room: ReturnType<typeof getRoom>): BattleStateSnapshot {
-  const cs = room?.combatState
-  return {
-    ships: cs?.ships.map(s => ({
-      shipId: s.shipId, teamId: s.teamId, name: s.name, ownerPlayerId: s.ownerPlayerId,
-      compartments: s.compartments.map(c => ({
-        compId: c.compId, position: c.position, equipmentType: c.equipmentType,
-        maxHp: c.maxHp, currentHp: c.currentHp, isDestroyed: c.isDestroyed,
-        multiCompRootId: c.multiCompRootId, multiCompSlaveIds: c.multiCompSlaveIds,
-      })),
-    })) || [],
-    playerPositions: cs?.playerPositions || {},
-    fighterTokens: cs?.fighterTokens.map(t => ({ ...t })) || [],
-    torpedoSalvoes: cs?.torpedoSalvoes.map(t => ({ ...t })) || [],
-    activeEffects: cs?.activeEffects.map(e => ({ ...e })) || [],
-    torpedoLoaded: cs?.torpedoLoaded || {},
-    currentTurnSlot: room?.currentTurnSlot ?? 0,
-    roundNumber: room?.roundNumber ?? 1,
-  }
-}
-
 /** 构建出生顺序 (与回合顺序一致) */
 function buildSpawnOrder(room: ReturnType<typeof getRoom>): number[] {
   if (!room) return []
@@ -684,6 +504,26 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
   const allReady = occArr.every(tid => room.readyTeams.has(tid))
   console.log(`[checkAllReady] allReady=${allReady}`)
   if (!allReady) return
+
+  // 验证每个队伍都有非空设计
+  for (const tid of occArr) {
+    const ds = room.designs.get(tid)
+    if (!ds || ds.ships.length === 0) {
+      console.log(`[checkAllReady] team ${tid} has no designs, aborting`)
+      room.readyTeams.delete(tid)
+      room.state.readyTeams = [...room.readyTeams]
+      for (const s of room.state.slots) {
+        if (s.teamId === tid) s.isReady = false
+      }
+      io.to(code).emit('room:state', room.state)
+      for (const s of room.state.slots) {
+        if (s.teamId === tid && s.socketId) {
+          io.to(s.socketId).emit('error', { message: '设计未完成：请先设计舰船再准备' })
+        }
+      }
+      return
+    }
+  }
 
   room.state.phase = 'battle'
   room.state.readyTeams = [...room.readyTeams]

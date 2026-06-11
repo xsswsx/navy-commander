@@ -48,7 +48,7 @@ export function handleCommand(
   }
 
   const eqType = sourceComp.equipmentType
-  const eqDef = getEquipment(eqType)
+  const eqDef = getEquipment(eqType as any)
   const playerName = room.state.slots[slotIndex]?.playerName || '?'
 
   let s = state
@@ -326,7 +326,7 @@ export function handleCommand(
         logs.push({ message: '不能对指挥类军备发动发令', type: 'error' })
         return { newState: s, logs }
       }
-      const tgtEq = getEquipment(tgtComp.equipmentType)
+      const tgtEq = getEquipment(tgtComp.equipmentType as any)
       if (tgtEq.commands.length === 0) {
         logs.push({ message: '目标军备没有可执行的指挥', type: 'error' })
         return { newState: s, logs }

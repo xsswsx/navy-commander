@@ -107,11 +107,16 @@ export function handleCommand(
           return { newState: s, logs }
         }
         const targetShip = findShipByComp(s, targetCompId)
-        const hasAB = targetShip?.compartments.some(
-          c => c.equipmentType === 'afterburner' && !c.isDestroyed
-        ) ?? false
+        const shipComps = targetShip?.compartments ?? []
+        const hasAB = shipComps.some(c => c.equipmentType === 'afterburner' && !c.isDestroyed)
+        const hasFC = shipComps.some(c => c.equipmentType === 'fire_control' && !c.isDestroyed)
 
-        const d8 = rollOne(rng, 8)
+        let d8 = rollOne(rng, 8)
+        // 火控计算机: D8=4或5不变, 6以上-1, 3以下+1
+        if (hasFC) {
+          if (d8 >= 6) d8--
+          else if (d8 <= 3) d8++
+        }
         const adjacentComp = (compId: string, offset: number): string | null => {
           const ship = findShipByComp(s, compId)
           if (!ship) return null
@@ -123,7 +128,7 @@ export function handleCommand(
 
         const hitCompId = resolveNavalGunHit(d8, targetCompId, hasAB, adjacentComp)
         if (!hitCompId) {
-          logs.push({ message: `[射击 D8=${d8}] ${eqDef.name} 未命中!${hasAB ? ' (目标有加力引擎)' : ''}`, type: 'info' })
+          logs.push({ message: `[射击 D8=${d8}] ${eqDef.name} 未命中!${hasAB ? ' (目标有加力引擎)' : ''}${hasFC ? ' (火控修正)' : ''}`, type: 'info' })
           s = useCommand(s, sourceCompId)
           break
         }

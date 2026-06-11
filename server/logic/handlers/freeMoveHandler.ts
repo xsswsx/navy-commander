@@ -2,7 +2,7 @@
 import type { ServerRoom } from '../../state.js'
 import type { ClientIntent } from '../../../shared/protocol.js'
 import type { ServerCombatState } from '../../data/CombatState.js'
-import { movePlayer, findShip, getCompartmentByPosition } from '../../data/CombatState.js'
+import { movePlayer, findShip, getCompartmentByPosition, isFreeActionUsed, markFreeActionUsed } from '../../data/CombatState.js'
 
 const FREE_MOVE_RANGE = 2
 
@@ -17,6 +17,11 @@ export function handleFreeMove(
   // 1. 权限
   if (room.currentTurnSlot !== slotIndex) {
     return { newState: state, logs }
+  }
+
+  // 每回合限一次自由行动
+  if (isFreeActionUsed(state, slotIndex)) {
+    return { newState: state, logs: [{ message: '本回合已使用自由行动', type: 'error' }] }
   }
 
   const { toCompId } = intent.payload
@@ -50,7 +55,8 @@ export function handleFreeMove(
     return { newState: state, logs }
   }
 
-  const newState = movePlayer(state, slotIndex, pos.shipId, toComp.position)
+  let newState = movePlayer(state, slotIndex, pos.shipId, toComp.position)
+  newState = markFreeActionUsed(newState, slotIndex)
   const playerName = room.state.slots[slotIndex]?.playerName || '?'
   logs.push({ message: `${playerName} 跑动到舱段${toComp.position + 1}`, type: 'system' })
 

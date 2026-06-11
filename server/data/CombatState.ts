@@ -1,5 +1,5 @@
 // server/data/CombatState.ts
-// 数据层：纯函数。每个函数 (state, ...params) → { state, ...outputs }
+// 数据层：纯函数。每个函数 (state, ...params) 鈫 { state, ...outputs }
 // 不掷骰子、不发 socket、不做权限检查。
 
 import type {
@@ -110,12 +110,36 @@ export function markAmmoDepotUsed(
   return s
 }
 
+/** 标记本回合已使用自由行动 */
+export function markFreeActionUsed(
+  state: ServerCombatState, slotIndex: number
+): ServerCombatState {
+  const s = clone(state)
+  s.freeActionUsed[slotIndex] = true
+  return s
+}
+
+/** 检查本回合是否已使用自由行动 */
+export function isFreeActionUsed(
+  state: ServerCombatState, slotIndex: number
+): boolean {
+  return state.freeActionUsed[slotIndex] ?? false
+}
+
+/** 获取第一轮补偿 */
+export function getFirstRoundCompensation(
+  state: ServerCombatState, slotIndex: number
+): number {
+  return state.firstRoundCompensation[slotIndex] ?? 0
+}
+
 /** 重置每回合计数器 */
 export function resetPerTurn(state: ServerCombatState): ServerCombatState {
   const s = clone(state)
   s.commandsUsed = {}
   s.sortiesUsed = {}
   s.ammoDepotUsed = {}
+  s.freeActionUsed = {}
   return s
 }
 
@@ -191,13 +215,6 @@ export function tickEffects(state: ServerCombatState): ServerCombatState {
   return s
 }
 
-/** 按 shipId 查找船只 */
-export function findShip(
-  state: ServerCombatState, shipId: string
-): ServerShip | undefined {
-  return state.ships.find(s => s.shipId === shipId)
-}
-
 // ===== Query Functions =====
 
 export function findCompartment(
@@ -210,8 +227,7 @@ export function findCompartment(
   return null
 }
 
-/** 按 shipId 查找船只 (返回 null 版本) */
-export function findShipOrNull(
+export function findShip(
   state: ServerCombatState, shipId: string
 ): ServerShip | null {
   return state.ships.find(s => s.shipId === shipId) ?? null
@@ -308,8 +324,6 @@ export function getLivingCompartmentByIndex(
   return living[index % living.length] ?? null
 }
 
-// ===== Destruction =====
-
 export interface DestructionResult {
   state: ServerCombatState
   logs: { message: string; type: string }[]
@@ -334,7 +348,7 @@ export function handleDestruction(
       const acShip = findShipByComp(s, ac.compId)
       const shipName = acShip?.name ?? '?'
       logs.push({
-        message: `殉爆 → ${shipName} 第${ac.position + 1}舱段 8伤害${result.destroyed ? ' — 击毁!' : ''}`,
+        message: `殉爆 鈫 ${shipName} 第${ac.position + 1}舱段 8伤害${result.destroyed ? ' 鈥 击毁!' : ''}`,
         type: result.destroyed ? 'destroy' : 'damage',
       })
       if (result.destroyed) {
@@ -355,7 +369,7 @@ export function handleDestruction(
       const acShip = findShipByComp(s, ac.compId)
       const shipName = acShip?.name ?? '?'
       logs.push({
-        message: `殉爆 → ${shipName} 第${ac.position + 1}舱段 5伤害${result.destroyed ? ' — 击毁!' : ''}`,
+        message: `殉爆 鈫 ${shipName} 第${ac.position + 1}舱段 5伤害${result.destroyed ? ' 鈥 击毁!' : ''}`,
         type: result.destroyed ? 'destroy' : 'damage',
       })
       if (result.destroyed) {

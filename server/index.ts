@@ -313,7 +313,41 @@ io.on('connection', (socket) => {
     const room = getRoom(slot.code)
     if (!room || room.state.phase !== 'battle') return
     if (room.currentTurnSlot !== slot.slotIndex) return
-    const { drawn, newDraw, newDiscard } = drawFromDeck(room.drawPile, room.discardPile, count || 1)
+    // 服务端权威：计算当前舱段抽牌数 = 舱段drawValue + 第一轮补偿
+    let drawCount = 0
+    const cs = room.combatState
+    if (cs) {
+      const pos = cs.playerPositions[slot.slotIndex]
+      if (pos) {
+        const ship = cs.ships.find(sh => sh.shipId === pos.shipId)
+        const comp = ship?.compartments.find(c => c.position === pos.compIndex)
+        if (comp && comp.equipmentType && !comp.isDestroyed) {
+          // 舱段抽牌值（从规则书提取，避免跨层import registry）
+          const compDrawMap: Record<string, number> = {
+            dormitory: 4, comms_hub: 3,
+            ammo_depot: 2, fire_control: 2, afterburner: 2, depth_charge: 2, aa_gun: 2, integrated_command: 2,
+          }
+          drawCount = compDrawMap[comp.equipmentType] ?? 1
+        } else {
+          drawCount = 1 // 被毁/空舱段: 基础1张
+        }
+        // 第一轮补偿
+        const compensation = cs.firstRoundCompensation[slot.slotIndex] ?? 0
+        if (room.roundNumber === 1 && compensation > 0) {
+          drawCount += compensation
+          const playerName = room.state.slots[slot.slotIndex]?.playerName || '?'
+          io.to(slot.code).emit('battle:log', {
+            message: `${playerName} 第一轮后攻补偿 +${compensation}张`,
+            type: 'system', timestamp: Date.now(),
+          })
+        }
+      } else {
+        drawCount = 2 // fallback
+      }
+    } else {
+      drawCount = count || 2 // fallback: 用客户端传来的值
+    }
+    const { drawn, newDraw, newDiscard } = drawFromDeck(room.drawPile, room.discardPile, drawCount)
     room.drawPile = newDraw
     room.discardPile = newDiscard
     const hand = room.playerHands.get(slot.slotIndex) || []
@@ -549,6 +583,17 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     }
   }
 
+  // 计算第一轮补偿：后进行回合的势力对每个先于自己行动的势力 +1 张
+  const firstRoundComp: Record<number, number> = {}
+  const teamsSeen = new Set<string>()
+  for (const si of turnOrder) {
+    const playerTeam = room.state.slots[si]?.teamId
+    if (playerTeam && !teamsSeen.has(playerTeam)) {
+      teamsSeen.add(playerTeam)
+    }
+    firstRoundComp[si] = [...teamsSeen].indexOf(playerTeam || '')
+  }
+
   // 构建服务端牌堆：每人初始手牌 2 张（规则书：选出生点后每人抽2张牌）
   const deck = shuffleCards(buildDeckCards())
   const playerHands: Record<number, CardData[]> = {}
@@ -598,6 +643,8 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
   const slotPlayerMap = new Map<number, string>()
   for (const p of players) slotPlayerMap.set(p.slotIndex, p.teamId)
   const { state: combatState } = buildCombatState(room.designs as any, slotPlayerMap, room.spawns)
+  // 注入第一轮补偿
+  combatState.firstRoundCompensation = firstRoundComp
   room.combatState = combatState
 
   console.log(`[checkAllReady] EMITTING battle:init to room ${code} — ${players.length} players, ${turnOrder.length} slots, spawnOrder=[${room.spawnOrder}]`)

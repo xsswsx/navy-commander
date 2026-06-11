@@ -2,7 +2,7 @@
 import type { ServerRoom } from '../../state.js'
 import type { ClientIntent } from '../../../shared/protocol.js'
 import type { ServerCombatState } from '../../data/CombatState.js'
-import { findShip, getCompartmentByPosition, getCommandsUsed } from '../../data/CombatState.js'
+import { findShip, getCompartmentByPosition, getCommandsUsed, isFreeActionUsed, markFreeActionUsed } from '../../data/CombatState.js'
 import { getEquipment } from '../../../src/game/equipment/registry.js'
 
 export interface FreeCommandResult {
@@ -25,6 +25,11 @@ export function handleFreeCommand(
 
   if (room.currentTurnSlot !== slotIndex) {
     return { newState: state, logs }
+  }
+
+  // 每回合限一次自由行动
+  if (isFreeActionUsed(state, slotIndex)) {
+    return { newState: state, logs: [{ message: '本回合已使用自由行动', type: 'error' }] }
   }
 
   const pos = state.playerPositions[slotIndex]
@@ -70,7 +75,7 @@ export function handleFreeCommand(
   // 如果是中继类装备，返回 relayTarget
   if (['command_room', 'command_center', 'integrated_command'].includes(comp.equipmentType)) {
     return {
-      newState: state,
+      newState: markFreeActionUsed(state, slotIndex),
       logs,
       relayTarget: {
         sourceCompId: comp.compId,
@@ -81,7 +86,7 @@ export function handleFreeCommand(
   }
 
   return {
-    newState: state,
+    newState: markFreeActionUsed(state, slotIndex),
     logs: [{ message: `选择 ${eqDef.name} 的目标`, type: 'system' }],
   }
 }

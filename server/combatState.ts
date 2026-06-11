@@ -55,6 +55,8 @@ export interface ServerCombatState {
   ammoDepotUsed: Record<string, boolean>
   commandsUsed: Record<string, number>
   sortiesUsed: Record<string, number>
+  freeActionUsed: Record<number, boolean>  // slotIndex → 本回合是否已用自由行动
+  firstRoundCompensation: Record<number, number>  // slotIndex → 第一轮补偿抽牌数
 }
 
 // ID 计数器 (仅用于 token IDs)
@@ -139,6 +141,8 @@ export function buildCombatState(
       ammoDepotUsed: {},
       commandsUsed: {},
       sortiesUsed: {},
+      freeActionUsed: {},
+      firstRoundCompensation: {},
     },
   }
 }

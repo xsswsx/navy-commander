@@ -62,6 +62,21 @@ export function handleEndTurn(
   // 4. 重置每回合计数器
   s = resetPerTurn(s)
 
+  // 4.5. 强制弃牌至手牌上限（舰船舱段数）
+  const pos = s.playerPositions[slotIndex]
+  if (pos) {
+    const ship = findShipByComp(s, pos.shipId || '') || s.ships.find(sh => sh.shipId === pos.shipId)
+    const maxCards = ship?.compartments.length ?? 5
+    const hand = room.playerHands.get(slotIndex) || []
+    if (hand.length > maxCards) {
+      const discarded = hand.splice(maxCards)
+      room.discardPile.push(...discarded)
+      room.playerHands.set(slotIndex, hand)
+      const endPlayer = room.state.slots[slotIndex]
+      logs.push({ message: `${endPlayer?.playerName || '?'} 弃牌至${maxCards}张（手牌上限）`, type: 'system' })
+    }
+  }
+
   // 5. 计算下一个回合槽位
   const turnOrder = room.lastBattleInit?.turnOrder || []
   const curIdx = turnOrder.indexOf(room.currentTurnSlot)

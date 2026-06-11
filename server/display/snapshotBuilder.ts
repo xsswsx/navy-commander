@@ -32,6 +32,19 @@ export function buildSnapshot(
     currentTurnSlot: room.currentTurnSlot,
     roundNumber: room.roundNumber,
     winner: room.winner ?? null,
-    phase: room.state.phase === 'battle' ? 'battle' : 'spawn',
+    phase: getBattlePhase(combatState, room),
   }
+}
+
+/** 判断当前处于 spawn 还是 battle 阶段 */
+function getBattlePhase(
+  combatState: ServerCombatState,
+  room: ServerRoom
+): 'spawn' | 'battle' {
+  if (room.state.phase !== 'battle') return 'spawn'
+
+  // 检查所有有玩家的槽位是否都已选择出生点
+  const occupied = room.state.slots.filter(s => s.playerName).map(s => s.index)
+  const allSpawned = occupied.every(idx => combatState.playerPositions[idx] != null)
+  return allSpawned ? 'battle' : 'spawn'
 }

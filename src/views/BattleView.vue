@@ -31,10 +31,16 @@ const mySlotIndex = ref(-1)
 const currentTurnSlot = ref(-1)
 const mpRoundNumber = ref(1)
 const mpSpawnOrder = ref<number[]>([])
-const mpSpawnIdx = ref(0)
+/** 哪些槽位已出生 (从 snapshot 的 playerPositions 推导) */
+const mpSpawned = ref<Record<number, boolean>>({})
 const isMyTurnToSpawn = computed(() => {
   if (!isMP.value || mpSpawnOrder.value.length === 0) return false
-  return mpSpawnOrder.value[mpSpawnIdx.value] === mySlotIndex.value
+  // 找到出生顺序中第一个尚未出生的人 — 如果是我，就轮到我了
+  for (const slotIdx of mpSpawnOrder.value) {
+    const pos = mpSpawned.value[slotIdx]
+    if (!pos) return slotIdx === mySlotIndex.value
+  }
+  return false
 })
 
 // 多人模式权限
@@ -96,7 +102,6 @@ if (isMP.value) {
 
     // 出生顺序 (总是设置, 无论走哪条路径)
     mpSpawnOrder.value = payload.spawnOrder || payload.turnOrder || []
-    mpSpawnIdx.value = 0
 
     // 匹配本客户端槽位: sessionStorage (joinSlot 时存储) > playerName > 默认0
     const storedSlot = sessionStorage.getItem('mp_slotIndex')
@@ -377,8 +382,10 @@ function applyBattleStateSnapshot(s: BattleStateSnapshot): void {
     } as any)
   }
 
-  // 玩家位置
+  // 玩家位置 → 同步出生状态
+  mpSpawned.value = {}
   for (const [slotIdx, pos] of Object.entries(s.playerPositions)) {
+    mpSpawned.value[Number(slotIdx)] = true
     const pid = slotToPlayerId.value[Number(slotIdx)]
     const player = pid ? gameStore.players.find(p => p.id === pid) : null
     if (player) {

@@ -549,14 +549,17 @@ function checkAllReady(io: Server, room: ReturnType<typeof getRoom>, code: strin
     }
   }
 
-  // 构建服务端牌堆 (不发初始手牌, 由各玩家回合开始时的 startDrawPhase 负责)
+  // 构建服务端牌堆：每人初始手牌 2 张（规则书：选出生点后每人抽2张牌）
   const deck = shuffleCards(buildDeckCards())
   const playerHands: Record<number, CardData[]> = {}
 
   let drawPile = [...deck]
   let discardPile: CardData[] = []
   for (const p of players) {
-    playerHands[p.slotIndex] = []
+    const result = drawFromDeck(drawPile, discardPile, 2)
+    drawPile = result.newDraw
+    discardPile = result.newDiscard
+    playerHands[p.slotIndex] = result.drawn
   }
 
   // 收集所有阵营的设计

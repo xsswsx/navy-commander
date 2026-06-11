@@ -56,12 +56,8 @@ export function handleIntent(
     }
 
     case 'freeCommand': {
-      const result = handleFreeCommand(s, room, slotIndex, intent)
-      return {
-        newState: result.newState,
-        logs: [...allLogs, ...result.logs],
-        privatePayload: result.relayTarget,
-      }
+      const result = handleFreeCommand(s, room, slotIndex, intent, rng)
+      return { newState: result.newState, logs: [...allLogs, ...result.logs] }
     }
 
     case 'targetSelection': {

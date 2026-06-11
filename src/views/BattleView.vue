@@ -905,10 +905,14 @@ function executeTargetedCommand(
   // 多人模式: 服务器权威, 发送意图后短接, 不本地执行
   if (isMP.value) {
     if (uiStore.isFreeAction) {
-      multiplayerClient.sendIntent({
-        type: 'freeCommand',
-        payload: { compartmentId: comp.id },
-      })
+      // 自由指挥: 发完整 freeCommand intent (含目标信息，服务端直接执行)
+      const payload: any = { sourceCompId: comp.id, commandId: cmdId }
+      if (uiStore.battleState === 'targeting_ship') {
+        payload.targetShipId = targetId
+      } else {
+        payload.targetCompId = targetId
+      }
+      multiplayerClient.sendIntent({ type: 'freeCommand', payload })
     } else {
       if (uiStore.selectedCardIds.length > 0) {
         multiplayerClient.playCard(uiStore.selectedCardIds[0])

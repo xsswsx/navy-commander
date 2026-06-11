@@ -1,25 +1,23 @@
 // server/logic/handlers/freeCommandHandler.ts
 import type { ServerRoom } from '../../state.js'
 import type { ClientIntent } from '../../../shared/protocol.js'
-import type { ServerCombatState } from '../../data/CombatState.js'
-import { findShip, getCompartmentByPosition, getCommandsUsed, isFreeActionUsed, markFreeActionUsed } from '../../data/CombatState.js'
+import type { ServerCombatState, ServerCompartment, ServerShip } from '../../data/CombatState.js'
+import { findShip, getCompartmentByPosition, getCommandsUsed, isFreeActionUsed, markFreeActionUsed, findCompartment } from '../../data/CombatState.js'
 import { getEquipment } from '../../../src/game/equipment/registry.js'
+import type { DiceRng } from '../rules/dice.js'
+import { handleCommand } from './commandHandler.js'
 
 export interface FreeCommandResult {
   newState: ServerCombatState
   logs: { message: string; type: string }[]
-  relayTarget?: {
-    sourceCompId: string
-    relayedCommandId: string
-    scope: string
-  }
 }
 
 export function handleFreeCommand(
   state: ServerCombatState,
   room: ServerRoom,
   slotIndex: number,
-  intent: ClientIntent
+  intent: ClientIntent,
+  rng: DiceRng
 ): FreeCommandResult {
   const logs: { message: string; type: string }[] = []
 
@@ -34,20 +32,17 @@ export function handleFreeCommand(
 
   const pos = state.playerPositions[slotIndex]
   if (!pos) {
-    logs.push({ message: '玩家没有位置', type: 'error' })
-    return { newState: state, logs }
+    return { newState: state, logs: [{ message: '玩家没有位置', type: 'error' }] }
   }
 
   const ship = findShip(state, pos.shipId)
   if (!ship) {
-    logs.push({ message: '舰船不存在', type: 'error' })
-    return { newState: state, logs }
+    return { newState: state, logs: [{ message: '舰船不存在', type: 'error' }] }
   }
 
   let comp = getCompartmentByPosition(ship, pos.compIndex)
   if (!comp) {
-    logs.push({ message: '无效舱段', type: 'error' })
-    return { newState: state, logs }
+    return { newState: state, logs: [{ message: '无效舱段', type: 'error' }] }
   }
 
   // 多舱段：从属重定向到主舱段
@@ -57,8 +52,7 @@ export function handleFreeCommand(
   }
 
   if (!comp.equipmentType || comp.isDestroyed) {
-    logs.push({ message: '当前舱段没有可指挥的军备', type: 'error' })
-    return { newState: state, logs }
+    return { newState: state, logs: [{ message: '当前舱段没有可指挥的军备', type: 'error' }] }
   }
 
   const eqDef = getEquipment(comp.equipmentType as any)
@@ -67,26 +61,46 @@ export function handleFreeCommand(
   if (eqDef.commandsPerTurn > 0) {
     const used = getCommandsUsed(state, comp.compId)
     if (used >= eqDef.commandsPerTurn) {
-      logs.push({ message: `本回合已指挥 ${used}/${eqDef.commandsPerTurn} 次`, type: 'error' })
-      return { newState: state, logs }
+      return { newState: state, logs: [{ message: `本回合已指挥 ${used}/${eqDef.commandsPerTurn} 次`, type: 'error' }] }
     }
   }
 
-  // 如果是中继类装备，返回 relayTarget
-  if (['command_room', 'command_center', 'integrated_command'].includes(comp.equipmentType)) {
-    return {
-      newState: markFreeActionUsed(state, slotIndex),
-      logs,
-      relayTarget: {
-        sourceCompId: comp.compId,
-        relayedCommandId: eqDef.commands[0]?.id || '',
-        scope: eqDef.commands[0]?.targeting.scope || 'own-compartment',
-      },
+  // 构建 targetSelection intent，内部调用 commandHandler 执行
+  const { sourceCompId, targetCompId, targetShipId, commandId } = intent.payload
+  const finalSourceCompId = sourceCompId || comp.compId
+
+  if (commandId) {
+    // 客户端已指定 commandId → 直接执行
+    const cmdIntent: ClientIntent = {
+      type: 'targetSelection',
+      payload: { sourceCompId: finalSourceCompId, commandId, targetCompId, targetShipId },
     }
+    const result = handleCommand(state, room, slotIndex, cmdIntent, rng)
+    // 自由行动 mark 在 commandHandler 执行之后（防止失败时消耗）
+    const newState = markFreeActionUsed(result.newState, slotIndex)
+    return { newState, logs: [...logs, ...result.logs] }
   }
 
+  // 客户端未指定 commandId → 自动选择第一个命令
+  if (eqDef.commands.length === 0) {
+    return { newState: state, logs: [{ message: '此军备没有可执行的指挥', type: 'error' }] }
+  }
+
+  // 自目标命令：直接执行
+  const firstCmd = eqDef.commands[0]
+  if (firstCmd.targeting.scope === 'self') {
+    const cmdIntent: ClientIntent = {
+      type: 'targetSelection',
+      payload: { sourceCompId: finalSourceCompId, commandId: firstCmd.id, targetCompId: finalSourceCompId },
+    }
+    const result = handleCommand(state, room, slotIndex, cmdIntent, rng)
+    const newState = markFreeActionUsed(result.newState, slotIndex)
+    return { newState, logs: [...logs, ...result.logs] }
+  }
+
+  // 需要目标 → 报错（客户端应提供完整 intent）
   return {
-    newState: markFreeActionUsed(state, slotIndex),
-    logs: [{ message: `选择 ${eqDef.name} 的目标`, type: 'system' }],
+    newState: state,
+    logs: [{ message: `${eqDef.name} 需要选择目标，请通过 targetSelection 发送`, type: 'error' }],
   }
 }

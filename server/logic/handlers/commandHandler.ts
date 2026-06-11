@@ -9,6 +9,7 @@ import {
   getAdjacentComps, isCompartmentSmoked, isTorpedoLoaded,
   canUseAmmoDepot, findCompartment, findShip,
   getLivingCompartments, getLivingCompartmentByIndex, isShipSunk,
+  getCommandsUsed,
 } from '../../data/CombatState.js'
 import { getEquipment } from '../../../src/game/equipment/registry.js'
 import type { DiceRng } from '../rules/dice.js'
@@ -50,6 +51,33 @@ export function handleCommand(
   const eqType = sourceComp.equipmentType
   const eqDef = getEquipment(eqType as any)
   const playerName = room.state.slots[slotIndex]?.playerName || '?'
+
+  // 检查指挥次数上限
+  if (eqDef.commandsPerTurn > 0) {
+    const used = getCommandsUsed(state, sourceCompId)
+    if (used >= eqDef.commandsPerTurn) {
+      return { newState: state, logs: [{ message: `本回合已指挥 ${used}/${eqDef.commandsPerTurn} 次`, type: 'error' }] }
+    }
+  }
+
+  // 检查机库出击架次上限
+  if (eqDef.tags.includes('hangar')) {
+    const hangarShip = findShipByComp(state, sourceCompId)
+    if (hangarShip) {
+      const totalCap = hangarShip.compartments
+        .filter(c => c.equipmentType && !c.isDestroyed)
+        .reduce((sum, c) => {
+          const eq = getEquipment(c.equipmentType as any)
+          return sum + (eq.tags.includes('hangar') ? eq.sortieCapacity : 0)
+        }, 0)
+      const usedSorties = state.fighterTokens.filter(f =>
+        hangarShip.compartments.some(c => c.compId === f.sourceCompartmentId)
+      ).length
+      if (totalCap > 0 && usedSorties >= totalCap) {
+        return { newState: state, logs: [{ message: `本舰出击架次已满 (${usedSorties}/${totalCap})`, type: 'error' }] }
+      }
+    }
+  }
 
   let s = state
 
